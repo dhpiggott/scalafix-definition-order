@@ -1,0 +1,53 @@
+name: Trial
+
+# Runs the rule, built from the dispatched ref, over a few other projects, to
+# see what it does to code it wasn't written against. Each job prints the
+# rewrite and checks that the result still compiles; the job summary has the
+# totals. The list is committed rather than a dispatch input, so nothing runs
+# that a reviewed commit didn't name.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trial:
+    name: Trial (${{ matrix.repo }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        repo:
+          - scala/scala3-example-project
+          - scopt/scopt
+          - sbt/sbt-ci-release
+          - typelevel/log4cats
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: sbt
+
+      - name: Set up sbt
+        uses: sbt/setup-sbt@v1
+
+      - name: Run the rule over ${{ matrix.repo }}
+        run: .github/scripts/trial.sh ${{ matrix.repo }}
+
+      - name: Upload the rewrite
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: trial-${{ strategy.job-index }}
+          path: |
+            diff.patch
+            scalafix.log

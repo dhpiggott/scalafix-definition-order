@@ -24,6 +24,14 @@ when working on the rule itself.
   same pull request. The header comment in `DefinitionOrder.scala` summarises
   it too.
 
+## Trying it on other projects
+
+`trial.yml` (dispatched by hand) builds the rule from the dispatched ref, runs
+it over each project in its matrix with `.github/scripts/trial.sh`, prints the
+rewrite and the diagnostics, and checks that the result still compiles. Run it
+after a change to the order and read the diffs. Add a project to the matrix
+rather than passing one in, so everything it runs is named in a commit.
+
 ## Releasing
 
 `release.yml` runs `sbt ci-release`. A `v*` tag publishes that version to Maven

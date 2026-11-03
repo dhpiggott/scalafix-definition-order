@@ -78,6 +78,45 @@ extension block. Each scope has exactly one order:
 - **A class, trait or enum body puts its fields (strict `val`s and `var`s)
   first**, then everything else. Each part is ordered as above.
 
+## How this relates to *Clean Code*
+
+The order follows the vertical formatting rules in chapter 5 of *Clean Code*,
+with some decisions of its own where the chapter is silent or Scala doesn't
+allow it.
+
+What it takes from the chapter:
+
+- **The newspaper metaphor and vertical ordering.** High-level code comes
+  first and detail further down, so a function that is called sits below the
+  one that calls it. The depth-first walk puts definitions in the order the
+  chapter's own examples use.
+- **Dependent functions.** The chapter says "the caller should be above the
+  callee, if at all possible". This rule makes that mandatory.
+- **Instance variables at the top of the class.** This is the "fields first"
+  rule.
+- **Team rules.** There is exactly one order, so there is nothing to agree on
+  or argue about in review.
+
+Where it goes its own way:
+
+- **Shared helpers.** The chapter wants a callee close to its caller, but says
+  nothing about a function with several callers. This rule puts it below the
+  last of them, which can leave it some way from the first.
+- **Conceptual affinity.** The chapter groups related functions that don't
+  call each other, such as a family of overloads. Nothing in the code tells the
+  rule they are related, so it orders them public before private, then by
+  name. Wrap them in `scalafix:off` to keep a grouping like that.
+- **Initialisation order.** A strict `val` must come before anything that
+  reads it while initialising, even when that puts it above a `def` that uses
+  it. This is how Scala works, not a style choice, and the chapter doesn't
+  cover it.
+- **Types.** A type goes immediately above the first definition that names it.
+  The chapter doesn't say where types go. This is the closest match to its
+  advice to declare a variable close to where it is used.
+
+Vertical openness, vertical density and horizontal formatting, the rest of the
+chapter, are a formatter's job.
+
 ## Comments
 
 A comment moves with the definition directly below it, as long as no blank line
