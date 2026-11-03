@@ -17,8 +17,9 @@ when working on the rule itself.
   leave the input unchanged, in which case its `// assert: DefinitionOrder`
   comments name the diagnostics it reports. The fixtures are excluded from
   scalafmt, because formatting one would change what it tests.
-- The rule is not run on its own sources: it can't be loaded into the build
-  that compiles it, and they are Scala 2.13 with braces.
+- The rule is not run on its own sources yet. Scalafix can't load a rule into
+  the build that compiles it, so this has to wait for a release the build can
+  take through `scalafixDependencies`.
 - When the order itself changes, change the README's description of it in the
   same pull request. The header comment in `DefinitionOrder.scala` summarises
   it too.
