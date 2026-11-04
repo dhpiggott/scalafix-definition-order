@@ -124,11 +124,16 @@ separates them. So does a trailing comment on the definition's last line. A
 comment that covers several definitions moves with the first of them only, so
 word it to stand on its own.
 
-The rule reports a scope rather than rewriting it when something else sits
-between two definitions, such as a comment set off by a blank line, an enum
-`case`, or an anonymous `given`. That scope needs ordering by hand. The same
-happens when a definition that has to move holds a `scalafix:off` range or a
-`scalafix:ok` comment, because Scalafix would drop part of the move.
+In two cases the rule can't rewrite a scope safely, so it reports the scope as
+out of order and leaves it for you to fix by hand:
+
+- **Something that isn't a definition sits between two definitions**, such as
+  a comment with a blank line below it, an enum `case`, or an anonymous
+  `given`. The rule doesn't know which definition it belongs with, so it has
+  nowhere to move it to.
+- **A definition that has to move contains a `scalafix:off` range or a
+  `scalafix:ok` comment.** Scalafix discards any edit inside one of those, so
+  only part of the move would be applied.
 
 ## Keeping an order the code can't express
 
