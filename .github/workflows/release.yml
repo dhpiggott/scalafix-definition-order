@@ -19,6 +19,9 @@ jobs:
     # the repository, so that only refs its deployment rules allow (v* tags
     # and main) can read them.
     environment: release
+    # Unmeasured until the first publish: on top of the build, sbt-ci-release
+    # uploads the bundle and waits for Central to validate it, which can take
+    # several minutes. Tighten this once real runs show how long that is.
     timeout-minutes: 20
     steps:
       - name: Checkout repository
