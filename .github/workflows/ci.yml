@@ -19,10 +19,10 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    # Runs take under a minute, and the first, with nothing cached, would have
-    # taken about the same had a download not stalled. Ten minutes leaves room
-    # for a slow cold start but stops a hung job well before GitHub's default
-    # of six hours.
+    # Runs take under a minute, even with nothing cached. Ten minutes leaves
+    # room for a slow cold start, and stops a hung job (the very first run hung
+    # silently after the formatting checks) long before GitHub's default of
+    # six hours.
     timeout-minutes: 10
     steps:
       - name: Checkout repository
