@@ -62,6 +62,9 @@ lazy val tests = project
   .dependsOn(rules)
   .settings(
     publish / skip := true,
+    // The testkit is built against the compiler itself, so it's published once
+    // per full Scala version (scalafix-testkit_2.13.18) rather than per binary
+    // version (_2.13), and has to be asked for that way.
     libraryDependencies +=
       ("ch.epfl.scala" % "scalafix-testkit" % scalafixVersion % Test)
         .cross(CrossVersion.full),
