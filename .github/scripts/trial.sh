@@ -59,3 +59,7 @@ echo "::endgroup::"
 echo "::group::diff"
 head -n 1500 "$here/diff.patch"
 echo "::endgroup::"
+
+# Fail the job if the rule crashed or its rewrite broke the build, so a red
+# matrix entry is a finding to look at. Diagnostics alone don't fail it.
+[ "$fixed" -eq 0 ] && [ "$compiled" -eq 0 ]
