@@ -34,6 +34,9 @@ git diff --stat -- . ':!project' ':!.scalafix.conf' > "$here/stat.txt"
 git diff -- . ':!project' ':!.scalafix.conf' > "$here/diff.patch"
 
 echo "::group::compile after the rewrite"
+# The check doesn't need SemanticDB, but leaving it on keeps the compiler
+# options the same as scalafixAll's, so sbt recompiles only what was rewritten
+# instead of the whole build.
 sbt --batch --no-colors "set every semanticdbEnabled := true" Test/compile 2>&1 | tail -40
 compiled=${PIPESTATUS[0]}
 echo "::endgroup::"
