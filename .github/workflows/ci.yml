@@ -8,7 +8,8 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   # Cancel superseded PR builds, but never a build of main: those are the runs
-  # that populate the caches every other run restores from.
+  # that save the dependency cache (setup-java's `cache: sbt`, below) that PR
+  # runs restore from, since a cache saved on one PR is invisible to others.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
