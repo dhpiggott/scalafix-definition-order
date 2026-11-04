@@ -40,17 +40,20 @@ lazy val rules = project
 // through the rule, and compared with the file of the same name under output,
 // or, where there is none, expected to come out unchanged with exactly the
 // diagnostics its `// assert:` comments name. They are written out of order
-// and to trip warnings, so scalafmt (see .scalafmt.conf) stays off them.
+// and to trip warnings, so scalafmt (see .scalafmt.conf) and sbt-tpolecat's
+// fatal warnings stay off them.
 lazy val input = project
   .settings(
     scalaVersion := scala3,
     semanticdbEnabled := true,
+    scalacOptions ~= (_.filterNot(Set("-Werror", "-Xfatal-warnings"))),
     publish / skip := true
   )
 
 lazy val output = project
   .settings(
     scalaVersion := scala3,
+    scalacOptions ~= (_.filterNot(Set("-Werror", "-Xfatal-warnings"))),
     publish / skip := true
   )
 
