@@ -35,7 +35,7 @@ rather than passing one in, so everything it runs is named in a commit.
 ## Releasing
 
 `release.yml` runs `sbt ci-release`. A `v*` tag publishes that version to Maven
-Central, and dispatching the workflow on `main` publishes a snapshot. The signing
+Central, and every push to `main` publishes a snapshot. The signing
 key and Central token are secrets in the `release` environment, which only
 `main` and `v*` tags can use. A cloud session can't push tags, so the maintainer
 creates the tag and the GitHub release.
