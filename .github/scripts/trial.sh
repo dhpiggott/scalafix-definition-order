@@ -60,6 +60,8 @@ echo "::group::diff"
 head -n 1500 "$here/diff.patch"
 echo "::endgroup::"
 
-# Fail the job if the rule crashed or its rewrite broke the build, so a red
-# matrix entry is a finding to look at. Diagnostics alone don't fail it.
-[ "$fixed" -eq 0 ] && [ "$compiled" -eq 0 ]
+# Fail the job if the rewrite broke the build, so a red matrix entry is a
+# finding to look at. scalafixAll's own exit code isn't used: it is non-zero
+# whenever the rule reports a scope it can't rewrite, which is expected, and
+# the summary shows it alongside the diagnostics.
+[ "$compiled" -eq 0 ]

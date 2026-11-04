@@ -45,7 +45,8 @@ jobs:
         uses: sbt/setup-sbt@v1
 
       # Builds the rule, runs it over the project, prints the rewrite and its
-      # diagnostics, and fails if the rewritten project no longer compiles.
+      # diagnostics, and fails only if the rewritten project no longer
+      # compiles.
       - name: Run the rule over ${{ matrix.repo }}
         run: .github/scripts/trial.sh ${{ matrix.repo }}
 
