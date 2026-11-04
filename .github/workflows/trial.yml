@@ -15,6 +15,10 @@ jobs:
   trial:
     name: Trial (${{ matrix.repo }})
     runs-on: ubuntu-latest
+    # Unmeasured until the first run. Each job compiles another project's
+    # whole build with SemanticDB and then recompiles what the rule rewrote,
+    # and log4cats has JS and Native modules too. Tighten this once real runs
+    # show how long that takes.
     timeout-minutes: 30
     strategy:
       fail-fast: false
