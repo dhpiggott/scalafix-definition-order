@@ -72,14 +72,47 @@ object DefinitionOrder {
 
   private final case class Edit(start: Int, end: Int, text: String)
 
+  // Offsets into the file, end exclusive.
+  private final case class Span(start: Int, end: Int) {
+    def overlaps(other: Span): Boolean = start < other.end && other.start < end
+    def contains(other: Span): Boolean =
+      start <= other.start && other.end <= end
+  }
+
   private final case class Item(
       stats: List[Stat],
-      kept: Option[(Int, Int)],
-      key: (Boolean, String, String),
+      kept: Option[Span],
+      key: SortKey,
       isType: Boolean,
       isStrict: Boolean,
       symbols: Set[Symbol]
   )
+
+  // How whatever the uses leave open is ordered: public before private, then
+  // by name, then by source text, which tells overloads apart.
+  private final case class SortKey(
+      isPrivate: Boolean,
+      name: String,
+      source: String
+  )
+
+  private object SortKey {
+    implicit val ordering: Ordering[SortKey] =
+      Ordering.by(key => (key.isPrivate, key.name, key.source))
+  }
+
+  private final case class Marker(isOff: Boolean, comment: Token.Comment)
+
+  private final case class Occurrence(offset: Int, symbol: Symbol)
+
+  // `runs` is false where the item is only named as a type.
+  private final case class Mention(item: Int, runs: Boolean)
+
+  private final case class Mentions(used: List[Int], runs: List[Int])
+
+  // Part of a run of definitions: one definition's block, or a whole kept
+  // range's, along with the kept item it belongs to.
+  private final case class Piece(block: Span, keptItem: Option[Int])
 
   private final class FileOrder(implicit doc: SemanticDocument) {
 
@@ -89,33 +122,33 @@ object DefinitionOrder {
 
     // The ranges a `scalafix:off` comment disables this rule for, from that
     // comment to the start of the `scalafix:on` that ends it.
-    private val keptRanges: List[(Int, Int)] = {
+    private val keptRanges: List[Span] = {
       val markers = doc.tokens.toList.collect { case comment: Token.Comment =>
         comment.value.trim.split("[\\s,]+").toList match {
           case "scalafix:off" :: rules if appliesHere(rules) =>
-            List((true, comment))
+            List(Marker(isOff = true, comment))
           case "scalafix:on" :: rules if appliesHere(rules) =>
-            List((false, comment))
+            List(Marker(isOff = false, comment))
           case _ => Nil
         }
       }.flatten
       val (ranges, open) = markers.foldLeft(
-        (List.empty[(Int, Int)], Option.empty[Int])
+        (List.empty[Span], Option.empty[Int])
       ) {
-        case ((ranges, None), (true, off))        => (ranges, Some(off.start))
-        case ((ranges, Some(start)), (false, on)) =>
-          ((start, on.end) :: ranges, None)
+        case ((ranges, None), Marker(true, off)) => (ranges, Some(off.start))
+        case ((ranges, Some(start)), Marker(false, on)) =>
+          (Span(start, on.end) :: ranges, None)
         case (state, _) => state
       }
-      (open.map(start => (start, text.length)).toList ++ ranges).reverse
+      (open.map(Span(_, text.length)).toList ++ ranges).reverse
     }
 
     // The lines a `scalafix:ok` comment disables this rule on.
-    private val okLines: List[(Int, Int)] =
+    private val okLines: List[Span] =
       doc.tokens.toList
         .collect { case comment: Token.Comment => comment }
         .filter(isOkComment)
-        .map(comment => (lineStart(comment.start), comment.end))
+        .map(comment => Span(lineStart(comment.start), comment.end))
 
     private val tokens: Vector[Token] = doc.tokens.toVector
 
@@ -124,10 +157,10 @@ object DefinitionOrder {
     // What the compiler filled in, such as a given passed as a context
     // argument, at the offset of the code it was filled in for. Without these
     // a given used only implicitly would have no users at all.
-    private val inferredUses: List[(Int, Symbol)] =
+    private val inferredUses: List[Occurrence] =
       doc.synthetics.toList.flatMap { synthetic =>
         originsOf(synthetic).headOption.toList.flatMap { origin =>
-          symbolsIn(synthetic).map(origin -> _)
+          symbolsIn(synthetic).map(Occurrence(origin, _))
         }
       }
 
@@ -209,29 +242,28 @@ object DefinitionOrder {
         items: Vector[Item],
         order: List[Int]
     ): Option[List[Edit]] = {
-      val units = items.indices.toList
+      val pieces = items.indices.toList
         .flatMap { id =>
           items(id).kept match {
-            case Some(_) => List((keptBlockOf(items(id)), Option(id)))
-            case None    =>
-              items(id).stats.map(stat => (blockOf(stat), Option.empty[Int]))
+            case Some(_) => List(Piece(keptBlockOf(items(id)), Some(id)))
+            case None => items(id).stats.map(stat => Piece(blockOf(stat), None))
           }
         }
-        .sortBy { case ((start, _), _) => start }
-      val blocks = units.map(_._1)
-      val gaps = blocks.zip(blocks.drop(1)).map { case ((_, end), (start, _)) =>
-        (end, start)
+        .sortBy(_.block.start)
+      val blocks = pieces.map(_.block)
+      val gaps = blocks.zip(blocks.drop(1)).map { case (before, after) =>
+        Span(before.end, after.start)
       }
-      val (start, end) = (blocks.head._1, blocks.last._2)
-      val indent = text.substring(lineStart(start), start)
-      val anchors = units.collect { case (block, Some(id)) => (block, id) }
-      val blocked = gaps.find { case (from, to) =>
-        from > to || text.substring(from, to).trim.nonEmpty
+      val run = Span(blocks.head.start, blocks.last.end)
+      val indent = text.substring(lineStart(run.start), run.start)
+      val anchors = pieces.filter(_.keptItem.isDefined)
+      val blocked = gaps.find { gap =>
+        gap.start > gap.end || text.substring(gap.start, gap.end).trim.nonEmpty
       }
       blocked match {
-        case Some((from, to)) =>
+        case Some(gap) =>
           report(
-            Position.Range(doc.input, from, to.max(from)),
+            Position.Range(doc.input, gap.start, gap.end.max(gap.start)),
             "These definitions are out of order, but something other than " +
               "whitespace separates two of them, so they can't be moved " +
               "automatically. A comment moves with the definition directly " +
@@ -240,23 +272,24 @@ object DefinitionOrder {
           None
         case None if indent.trim.nonEmpty =>
           report(
-            Position.Range(doc.input, start, end),
+            Position.Range(doc.input, run.start, run.end),
             "These definitions are out of order, but they don't start on a " +
               "line of their own, so they can't be moved automatically."
           )
           None
-        case None if suppressedWithin(start, end, anchors.map(_._1)) =>
+        case None if suppressedWithin(run, anchors.map(_.block)) =>
           report(
-            Position.Range(doc.input, start, end),
+            Position.Range(doc.input, run.start, run.end),
             "These definitions are out of order, but one that would move " +
               "holds a scalafix:off range or a scalafix:ok comment, and " +
               "scalafix won't edit inside those. Move them by hand."
           )
           None
         case None
-            if anchors.map(_._2) != order.filter(items(_).kept.nonEmpty) =>
+            if anchors.flatMap(_.keptItem) !=
+              order.filter(items(_).kept.nonEmpty) =>
           report(
-            Position.Range(doc.input, start, end),
+            Position.Range(doc.input, run.start, run.end),
             "These definitions are out of order, and putting them in order " +
               "would move one scalafix:off range past another, which the " +
               "rule leaves in place. Move the ranges by hand."
@@ -264,22 +297,23 @@ object DefinitionOrder {
           None
         case None =>
           val separator = "\n\n" + indent
-          val bounds = start :: anchors.flatMap { case ((from, to), _) =>
-            List(from, to)
-          } ++ List(end)
+          val bounds = run.start :: anchors.flatMap { anchor =>
+            List(anchor.block.start, anchor.block.end)
+          } ++ List(run.end)
           val segments = bounds.grouped(2).toList.collect {
-            case List(from, to) => (from, to)
+            case List(from, to) => Span(from, to)
           }
           val groups = splitAt(order, items).map(_.flatMap(items(_).stats))
           val last = segments.size - 1
           Some(segments.zip(groups).zipWithIndex.flatMap {
-            case (((from, to), stats), index) =>
-              val written = units.collect {
-                case ((unitStart, _), None)
-                    if from <= unitStart && unitStart < to =>
-                  unitStart
+            case ((segment, stats), index) =>
+              val written = pieces.collect {
+                case Piece(block, None)
+                    if segment.start <= block.start &&
+                      block.start < segment.end =>
+                  block.start
               }
-              if (written == stats.map(stat => blockOf(stat)._1))
+              if (written == stats.map(blockOf(_).start))
                 stats.flatMap(editsWithin)
               else {
                 val body = stats.map(render).mkString(separator)
@@ -289,24 +323,17 @@ object DefinitionOrder {
                   } else
                     (if (index == 0) "" else separator) + body +
                       (if (index == last) "" else separator)
-                List(Edit(from, to, rendered))
+                List(Edit(segment.start, segment.end, rendered))
               }
           })
       }
     }
 
     // Whether a suppressed range overlaps the part of the run the rule would
-    // rewrite: everything from `start` to `end` except the anchors.
-    private def suppressedWithin(
-        start: Int,
-        end: Int,
-        anchors: List[(Int, Int)]
-    ): Boolean =
-      (keptRanges ++ okLines).exists { case (from, to) =>
-        val overlaps = from < end && start < to
-        overlaps && !anchors.exists { case (anchorFrom, anchorTo) =>
-          anchorFrom <= from && to <= anchorTo
-        }
+    // rewrite: all of the run except the anchors.
+    private def suppressedWithin(run: Span, anchors: List[Span]): Boolean =
+      (keptRanges ++ okLines).exists { range =>
+        range.overlaps(run) && !anchors.exists(_.contains(range))
       }
 
     // The canonical order cut at each kept item, which stays where it is.
@@ -325,17 +352,18 @@ object DefinitionOrder {
     // A kept item's block runs from its `scalafix:off` comment to the end of
     // its `scalafix:on` one, when those sit directly against it, so that
     // nothing the rule writes lands inside the range.
-    private def keptBlockOf(item: Item): (Int, Int) = {
-      val (rangeStart, rangeEnd) = item.kept.getOrElse((0, 0))
-      val (first, _) = blockOf(item.stats.head)
-      val (_, last) = blockOf(item.stats.last)
+    private def keptBlockOf(item: Item): Span = {
+      val range = item.kept.getOrElse(Span(0, 0))
+      val first = blockOf(item.stats.head).start
+      val last = blockOf(item.stats.last).end
       val start =
-        if (rangeStart < first && onlyComments(rangeStart, first)) rangeStart
+        if (range.start < first && onlyComments(range.start, first))
+          range.start
         else first
       val end =
-        if (last < rangeEnd && onlyComments(last, rangeEnd)) rangeEnd
+        if (last < range.end && onlyComments(last, range.end)) range.end
         else last
-      (start, end)
+      Span(start, end)
     }
 
     private def onlyComments(from: Int, to: Int): Boolean =
@@ -347,24 +375,28 @@ object DefinitionOrder {
       problems = Patch.lint(Misplaced(position, message)) :: problems
 
     private def render(stat: Stat): String = {
-      val (start, end) = blockOf(stat)
+      val block = blockOf(stat)
       editsWithin(stat)
         .sortBy(-_.start)
-        .foldLeft(text.substring(start, end)) { (rendered, edit) =>
-          rendered.patch(edit.start - start, edit.text, edit.end - edit.start)
+        .foldLeft(text.substring(block.start, block.end)) { (rendered, edit) =>
+          rendered.patch(
+            edit.start - block.start,
+            edit.text,
+            edit.end - edit.start
+          )
         }
     }
 
     // A definition together with the comments directly above it, and one
     // trailing it on its last line.
-    private def blockOf(stat: Stat): (Int, Int) = {
+    private def blockOf(stat: Stat): Span = {
       val lineEnd = text.indexOf('\n', stat.pos.end) match {
         case -1  => text.length
         case end => end
       }
       val trailing = text.substring(stat.pos.end, lineEnd).trim
       val end = if (trailing.startsWith("//")) lineEnd else stat.pos.end
-      (leadingStart(stat.pos.start), end)
+      Span(leadingStart(stat.pos.start), end)
     }
 
     @tailrec private def leadingStart(start: Int): Int = {
@@ -433,12 +465,12 @@ object DefinitionOrder {
       val owners = items.indices
         .flatMap(id => items(id).symbols.map(_ -> id))
         .toMap
-      val (mentions, runs) = items.indices.toVector
-        .map(mentionsBy(_, items, owners))
-        .unzip
+      val mentions =
+        items.indices.toVector.map(mentionsBy(_, items, owners))
+      val runs = mentions.map(_.runs)
       val isField = items.map(item => scope.fieldsFirst && item.isStrict)
       val uses = items.indices.toVector.map { user =>
-        mentions(user).filterNot(used => isField(used) && !isField(user))
+        mentions(user).used.filterNot(used => isField(used) && !isField(user))
       }
       val pulls = items.indices.toVector.map { user =>
         val reads =
@@ -525,10 +557,10 @@ object DefinitionOrder {
           Item(
             stats = stats,
             kept = kept,
-            key = (
-              isPrivate(lead),
-              names.head.value,
-              text.substring(lead.pos.start, lead.pos.end)
+            key = SortKey(
+              isPrivate = isPrivate(lead),
+              name = names.head.value,
+              source = text.substring(lead.pos.start, lead.pos.end)
             ),
             isType = stats.exists(isType),
             isStrict = stats.exists(isStrict),
@@ -536,10 +568,8 @@ object DefinitionOrder {
           )
         }
 
-    private def keptRangeOf(stat: Stat): Option[(Int, Int)] =
-      keptRanges.find { case (start, end) =>
-        start <= stat.pos.start && stat.pos.end <= end
-      }
+    private def keptRangeOf(stat: Stat): Option[Span] =
+      keptRanges.find(_.contains(Span(stat.pos.start, stat.pos.end)))
 
     // The other items an item uses, in the order its body first mentions
     // them; and, of those, the ones it mentions other than as a bare type.
@@ -547,24 +577,27 @@ object DefinitionOrder {
         id: Int,
         items: Vector[Item],
         owners: Map[Symbol, Int]
-    ): (List[Int], List[Int]) = {
+    ): Mentions = {
       val stats = items(id).stats
       val named = stats
         .flatMap(_.collect { case name: Name => name })
-        .map(name => (name.pos.start, name.symbol))
-      val inferred = inferredUses.filter { case (offset, _) =>
-        stats.exists(stat => stat.pos.start <= offset && offset < stat.pos.end)
+        .map(name => Occurrence(name.pos.start, name.symbol))
+      val inferred = inferredUses.filter { use =>
+        stats.exists { stat =>
+          stat.pos.start <= use.offset && use.offset < stat.pos.end
+        }
       }
       val mentioned = (named ++ inferred)
-        .sortBy(_._1)
-        .flatMap { case (_, symbol) =>
-          val runs = !symbol.value.endsWith("#")
-          ownerIn(owners, symbol).map(owner => (owner, runs))
+        .sortBy(_.offset)
+        .flatMap { occurrence =>
+          val runs = !occurrence.symbol.value.endsWith("#")
+          ownerIn(owners, occurrence.symbol).map(Mention(_, runs))
         }
-        .filter(_._1 != id)
-      val used = mentioned.map(_._1).distinct
-      val run = mentioned.collect { case (owner, true) => owner }.distinct
-      (used, run)
+        .filter(_.item != id)
+      Mentions(
+        used = mentioned.map(_.item).distinct,
+        runs = mentioned.filter(_.runs).map(_.item).distinct
+      )
     }
 
     private def ownerIn(owners: Map[Symbol, Int], symbol: Symbol): Option[Int] =
