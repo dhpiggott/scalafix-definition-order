@@ -24,10 +24,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
-          # sbt-ci-release reads the version from the tag history (through
-          # sbt-dynver) and publishes a release only when HEAD is tagged. In a
-          # shallow clone it sees no tags, so a release tag would go out as a
-          # 0.0.0+… snapshot instead.
+          # sbt-ci-release takes the version from the tag history, through
+          # sbt-dynver. A shallow clone has no tags, so even a v* tag build
+          # would compute a 0.0.0+… version rather than the tag's.
           fetch-depth: 0
 
       - name: Set up Java
