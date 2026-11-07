@@ -11,7 +11,7 @@ repo=$1
 version=0.0.0-trial
 here=$(pwd)
 
-sbt --batch --no-colors "set ThisBuild / version := \"$version\"" rules/publishLocal ||
+sbt --batch --no-colors "set ThisBuild / version := \"$version\"; rules/publishLocal" ||
   exit 1
 
 git clone --quiet --depth 1 "https://github.com/$repo" "$RUNNER_TEMP/target"
@@ -22,11 +22,14 @@ cd "$RUNNER_TEMP/target" || exit 1
 echo 'addSbtPlugin("ch.epfl.scala" % "sbt-scalafix" % "0.14.9")' >> project/plugins.sbt
 echo 'rules = [DefinitionOrder]' > .scalafix.conf
 
-# `set every` reaches projects that turn SemanticDB off themselves. Each sbt
-# run is one `;`-separated argument because sbt 2's client joins separate
-# arguments into a single command line, which sbt 1 doesn't.
+# `set every` reaches projects that turn SemanticDB off themselves. Every sbt
+# run with a `set` in it is one `;`-separated argument, here and above,
+# because under sbt 2 a `set` given as its own argument also swallows the
+# arguments after it.
 semanticdb="set every semanticdbEnabled := true"
-rule="set ThisBuild / scalafixDependencies += \"io.github.dhpiggott\" %% \"scalafix-definition-order\" % \"$version\""
+# The rule is published for Scala 2.13 only, and a Scala 2.12 project, such
+# as an sbt 1 plugin, would otherwise ask for it as _2.12 (see the README).
+rule="set ThisBuild / scalafixScalaBinaryVersion := \"2.13\"; set ThisBuild / scalafixDependencies += \"io.github.dhpiggott\" %% \"scalafix-definition-order\" % \"$version\""
 
 # Whether the project compiles as cloned, under this JDK and with SemanticDB
 # on. A project that doesn't can't show the rule breaking it. log4cats is one:

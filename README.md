@@ -48,9 +48,19 @@ rules = [DefinitionOrder]
 ```
 
 Then `sbt scalafixAll` rewrites your sources, and `sbt "scalafixAll --check"`
-fails the build on anything out of place. The tests are Scala 3 sources,
-including the fewer-braces syntax. The rule's own sources are Scala 2.13, and
-CI checks them with the rule, but no test covers Scala 2.13 on its own.
+fails the build on anything out of place.
+
+The rule is published for Scala 2.13, which is what scalafix runs on for Scala
+2.13 and Scala 3 projects. A Scala 2.12 project, such as an sbt 1 plugin, also
+needs:
+
+```scala
+ThisBuild / scalafixScalaBinaryVersion := "2.13"
+```
+
+The tests are Scala 3 sources, including the fewer-braces syntax. The rule's
+own sources are Scala 2.13, and CI checks them with the rule, but no test
+covers Scala 2.13 on its own.
 
 ## The order
 
