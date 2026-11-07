@@ -1,6 +1,6 @@
 package io.github.dhpiggott.scalafix
 
-import scalafix.v1._
+import scalafix.v1.*
 
 private[scalafix] object Synthetics {
 

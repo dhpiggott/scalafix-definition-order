@@ -6,10 +6,10 @@ import scala.meta.Defn
 import scala.meta.Name
 import scala.meta.Stat
 
-import _root_.io.github.dhpiggott.scalafix.CanonicalOrder._
-import _root_.io.github.dhpiggott.scalafix.Scopes._
-import _root_.io.github.dhpiggott.scalafix.Synthetics.Occurrence
-import scalafix.v1._
+import io.github.dhpiggott.scalafix.CanonicalOrder.*
+import io.github.dhpiggott.scalafix.Scopes.*
+import io.github.dhpiggott.scalafix.Synthetics.Occurrence
+import scalafix.v1.*
 
 // Works out the order each scope's definitions go in: groups them into items,
 // finds what each item uses, and walks those uses (see `Walk`).

@@ -21,6 +21,17 @@ lazy val scala213 = _root_.scalafix.sbt.BuildInfo.scala213
 
 lazy val scala3 = "3.10.0"
 
+// Lets the Scala 2.13 sources use what Scala 3 syntax 2.13 accepts, such as
+// `import a.*` and `import a.{b as c}`. Scala 3 itself rejects the flag, so
+// it goes on the 2.13 projects only. It also turns Scala 3 migration
+// warnings into errors, and one of them fires on ordinary scalameta code:
+// scalameta's extension methods (`tree.collect`, `input.syntax`) are found
+// through a package prefix, which Scala 3 no longer searches. That only
+// matters if the rule is ever compiled with Scala 3, and the fix would be
+// importing scalameta internals by name, so that one warning is silenced.
+lazy val scala3Syntax =
+  Seq("-Xsource:3", "-Wconf:msg=found in a package prefix:s")
+
 lazy val scalafixVersion = _root_.scalafix.sbt.BuildInfo.scalafixVersion
 
 // Nothing to publish or check at the root, which only aggregates.
@@ -33,7 +44,8 @@ lazy val root = project
 lazy val rules = project
   .settings(
     moduleName := "scalafix-definition-order",
-    libraryDependencies += "ch.epfl.scala" %% "scalafix-core" % scalafixVersion
+    libraryDependencies += "ch.epfl.scala" %% "scalafix-core" % scalafixVersion,
+    scalacOptions ++= scala3Syntax
   )
 
 // The test fixtures: each file under input is compiled with SemanticDB, run
@@ -96,6 +108,7 @@ lazy val dogfood = project
     publish / skip := true,
     semanticdbEnabled := true,
     libraryDependencies += "ch.epfl.scala" %% "scalafix-core" % scalafixVersion,
+    scalacOptions ++= scala3Syntax,
     Compile / unmanagedSourceDirectories :=
       (rules / Compile / unmanagedSourceDirectories).value
   )

@@ -4,9 +4,9 @@ import scala.annotation.tailrec
 import scala.meta.Stat
 import scala.meta.Token
 
-import _root_.io.github.dhpiggott.scalafix.Scopes._
-import _root_.io.github.dhpiggott.scalafix.SourceText._
-import scalafix.v1._
+import io.github.dhpiggott.scalafix.Scopes.*
+import io.github.dhpiggott.scalafix.SourceText.*
+import scalafix.v1.*
 
 // A file as text: where its definitions and their comments start and end,
 // which parts of it the rule mustn't edit, and how an edit to it becomes a

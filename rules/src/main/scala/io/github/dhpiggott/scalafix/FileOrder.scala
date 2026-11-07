@@ -3,9 +3,9 @@ package io.github.dhpiggott.scalafix
 import scala.meta.Position
 import scala.meta.Stat
 
-import _root_.io.github.dhpiggott.scalafix.Scopes._
-import _root_.io.github.dhpiggott.scalafix.SourceText._
-import scalafix.v1._
+import io.github.dhpiggott.scalafix.Scopes.*
+import io.github.dhpiggott.scalafix.SourceText.*
+import scalafix.v1.*
 
 // Rewrites one file: every scope in it that is out of order and can be
 // rewritten is put in its canonical order, and every one that can't is

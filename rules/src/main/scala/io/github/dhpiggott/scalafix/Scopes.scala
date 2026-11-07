@@ -1,8 +1,8 @@
 package io.github.dhpiggott.scalafix
 
-import scala.meta._
+import scala.meta.*
 
-import scalafix.v1._
+import scalafix.v1.*
 
 // What the rule orders, read from the tree alone: the scopes of a file, the
 // definitions in each, and the items they are ordered as.

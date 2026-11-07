@@ -2,7 +2,7 @@ package io.github.dhpiggott.scalafix
 
 import scala.annotation.tailrec
 
-import _root_.io.github.dhpiggott.scalafix.Scopes._
+import io.github.dhpiggott.scalafix.Scopes.*
 
 // The depth-first walk. `pulls` are what an item needs directly above it
 // (types it names, strict vals its initialiser reads), placed just before

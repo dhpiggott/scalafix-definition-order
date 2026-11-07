@@ -1,9 +1,9 @@
 package io.github.dhpiggott.scalafix
 
-import scala.meta._
+import scala.meta.*
 
 import metaconfig.Configured
-import scalafix.v1._
+import scalafix.v1.*
 
 // Puts the definitions of each scope in one canonical order, worked out from
 // the code alone, so the order they start in never matters. A scope is a
