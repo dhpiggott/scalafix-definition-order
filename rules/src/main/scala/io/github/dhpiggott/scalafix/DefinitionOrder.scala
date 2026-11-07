@@ -128,8 +128,6 @@ object DefinitionOrder {
   // of these; most of the other Ints are offsets into the file.
   private type ItemId = Int
 
-  // Part of a run of definitions: one definition's block, or a whole kept
-  // range's, along with the kept item it belongs to.
   // A scope's items, and the order they go in (their ids, top to bottom).
   private final case class Ordered(items: Vector[Item], order: List[ItemId])
 
@@ -140,7 +138,10 @@ object DefinitionOrder {
 
   private final case class Member(stat: Stat, names: List[Name])
 
-  private final case class Mentions(used: List[ItemId], runs: List[ItemId])
+  private final case class Mentions(
+      used: List[ItemId],
+      executed: List[ItemId]
+  )
 
   // The depth-first walk. `pulls` are what an item needs directly above it
   // (types it names, strict vals its initialiser reads), placed just before
@@ -208,7 +209,19 @@ object DefinitionOrder {
     def order: List[ItemId] = reversed.reverse
   }
 
-  private final case class InItem(position: Int) extends Place
+  // Which item a member belongs to.
+  private sealed trait Group
+
+  private object Group {
+    // Any other definition, alone, by its position among the scope's members.
+    final case class Alone(index: Int) extends Group
+
+    // A class, trait or enum and its companion object, which share a name.
+    final case class Companions(name: String) extends Group
+
+    // Every definition in one kept range, which keeps its written order.
+    final case class Kept(range: Span) extends Group
+  }
 
   // One step of where an offset will end up, outermost first: at that offset
   // among what isn't an item (a definition's header, say, or anything inside
@@ -217,17 +230,22 @@ object DefinitionOrder {
   private sealed trait Place
 
   private object Place {
+    final case class InHeader(offset: Int) extends Place
+
+    final case class InItem(position: Int) extends Place
+
     implicit val ordering: Ordering[Place] = Ordering.by {
       case InHeader(offset) => (0, offset)
       case InItem(position) => (1, position)
     }
   }
 
-  private final case class InHeader(offset: Int) extends Place
+  // `executes` is false where the item is only named as a type, which runs
+  // none of its code.
+  private final case class Mention(item: ItemId, executes: Boolean)
 
-  // `runs` is false where the item is only named as a type.
-  private final case class Mention(item: ItemId, runs: Boolean)
-
+  // Part of a run of definitions: one definition's block, or a whole kept
+  // range's, along with the kept item it belongs to.
   private final case class Piece(block: Span, keptItem: Option[ItemId])
 
   // A scope's definitions as written: the pieces, the span from the first to
@@ -353,8 +371,7 @@ object DefinitionOrder {
       }
       lazy val nestedEdits =
         items.filter(_.kept.isEmpty).flatMap(_.stats).flatMap(editsWithin)
-      val canonical = order.flatMap(items(_).stats).map(_.pos.start)
-      if (canonical == members.map(_.stat.pos.start)) nestedEdits.toList
+      if (isInOrder(members, Ordered(items, order))) nestedEdits.toList
       else reordered(items, order).getOrElse(nestedEdits.toList)
     }
 
@@ -381,7 +398,7 @@ object DefinitionOrder {
         .toMap
       val mentions =
         items.indices.toVector.map(mentionsBy(_, items, owners))
-      val runs = mentions.map(_.runs)
+      val executed = mentions.map(_.executed)
       val isField = items.map(item => scope.fieldsFirst && item.isStrict)
       // Fields come first whatever uses them, so a field used by something
       // other than a field isn't placed below that user.
@@ -393,7 +410,7 @@ object DefinitionOrder {
       // initialiser reads. Everything else it uses is a child, placed below.
       val pulls = items.indices.toVector.map { user =>
         val reads =
-          if (items(user).isStrict) strictReads(user, items, runs) else Nil
+          if (items(user).isStrict) strictReads(user, items, executed) else Nil
         val candidates = (uses(user) ++ reads).distinct
         candidates.filter(used => items(used).isType || reads.contains(used))
       }
@@ -424,19 +441,11 @@ object DefinitionOrder {
       Ordered(items, walk.order)
     }
 
-    // Members grouped into items: everything in one kept range is one item
-    // (keyed by a negative number, so it can't clash with an index), a class, trait
-    // or enum shares its name with its companion, and anything else is an
-    // item of its own. Items come in the order their first member was
-    // written, and a class goes before its companion.
+    // Members grouped into items (see `Group`). Items come in the order their
+    // first member was written, and a class goes before its companion.
     private def itemsOf(members: List[Member]): Vector[Item] =
       members.zipWithIndex
-        .groupBy { case (member, index) =>
-          keptRangeOf(member.stat) match {
-            case Some(range) => Right(-1 - keptRanges.indexOf(range))
-            case None        => companionKey(member, index)
-          }
-        }
+        .groupBy { case (member, index) => groupOf(member, index) }
         .values
         .toVector
         .sortBy(group => group.map { case (_, index) => index }.min)
@@ -454,7 +463,7 @@ object DefinitionOrder {
           val names = group.flatMap { case (member, _) => member.names }
           val symbols = group.flatMap { case (member, _) =>
             member.names.flatMap { name =>
-              if (hasSyntheticCompanion(member.stat)) withCompanion(name.symbol)
+              if (isClassLike(member.stat)) withCompanion(name.symbol)
               else List(name.symbol)
             }
           }
@@ -473,20 +482,18 @@ object DefinitionOrder {
           )
         }
 
+    private def groupOf(member: Member, index: Int): Group = {
+      val pairs =
+        isClassLike(member.stat) || member.stat.isInstanceOf[Defn.Object]
+      keptRangeOf(member.stat) match {
+        case Some(range)   => Group.Kept(range)
+        case None if pairs => Group.Companions(member.names.head.value)
+        case None          => Group.Alone(index)
+      }
+    }
+
     private def keptRangeOf(stat: Stat): Option[Span] =
       keptRanges.find(_.contains(Span(stat.pos.start, stat.pos.end)))
-
-    private def companionKey(member: Member, index: Int): Either[String, Int] =
-      member.stat match {
-        case _: Defn.Object | _: Defn.Class | _: Defn.Trait | _: Defn.Enum =>
-          Left(member.names.head.value)
-        case _ => Right(index)
-      }
-
-    private def hasSyntheticCompanion(stat: Stat): Boolean = stat match {
-      case _: Defn.Class | _: Defn.Trait | _: Defn.Enum => true
-      case _                                            => false
-    }
 
     // A class, trait or enum with no companion written out still has one in
     // SemanticDB, and it is what `Type(...)` and `Type.Case` resolve to. A
@@ -518,9 +525,8 @@ object DefinitionOrder {
     }
 
     private def isType(stat: Stat): Boolean = stat match {
-      case _: Defn.Class | _: Defn.Trait | _: Defn.Enum => true
-      case _: Defn.Type | _: Decl.Type                  => true
-      case _                                            => false
+      case _: Defn.Type | _: Decl.Type => true
+      case _                           => isClassLike(stat)
     }
 
     private def isStrict(stat: Stat): Boolean = stat match {
@@ -531,7 +537,8 @@ object DefinitionOrder {
 
     // The other items an item uses, in the order its body first mentions
     // them once the scopes nested in it are in order (see `settledKey`); and,
-    // of those, the ones it mentions other than as a bare type.
+    // of those, the ones whose code it runs: everything it mentions other than
+    // as a bare type.
     private def mentionsBy(
         id: ItemId,
         items: Vector[Item],
@@ -549,17 +556,17 @@ object DefinitionOrder {
       val kept = items(id).kept.isDefined
       val mentioned = (named ++ inferred)
         .sortBy { occurrence =>
-          if (kept) List(InHeader(occurrence.offset))
+          if (kept) List(Place.InHeader(occurrence.offset))
           else settledKey(stats, occurrence.offset)
         }
         .flatMap { occurrence =>
-          val runs = !occurrence.symbol.value.endsWith("#")
-          ownerIn(owners, occurrence.symbol).map(Mention(_, runs))
+          val executes = !occurrence.symbol.value.endsWith("#")
+          ownerIn(owners, occurrence.symbol).map(Mention(_, executes))
         }
         .filter(_.item != id)
       Mentions(
         used = mentioned.map(_.item).distinct,
-        runs = mentioned.filter(_.runs).map(_.item).distinct
+        executed = mentioned.filter(_.executes).map(_.item).distinct
       )
     }
 
@@ -572,9 +579,9 @@ object DefinitionOrder {
       stats.zipWithIndex
         .collectFirst {
           case (stat, index) if covers(stat, offset) =>
-            InItem(index) :: keyWithin(stat, offset)
+            Place.InItem(index) :: keyWithin(stat, offset)
         }
-        .getOrElse(List(InHeader(offset)))
+        .getOrElse(List(Place.InHeader(offset)))
 
     // Inside a definition, anything before its body (its header) comes first,
     // then its body's items in the order they will be in.
@@ -584,12 +591,12 @@ object DefinitionOrder {
           order.zipWithIndex.collectFirst {
             case (id, position) if items(id).stats.exists(covers(_, offset)) =>
               val inside =
-                if (items(id).kept.isDefined) List(InHeader(offset))
+                if (items(id).kept.isDefined) List(Place.InHeader(offset))
                 else settledKey(items(id).stats, offset)
-              InItem(position) :: inside
+              Place.InItem(position) :: inside
           }
         }
-        .getOrElse(List(InHeader(offset)))
+        .getOrElse(List(Place.InHeader(offset)))
 
     // The order the scope nested in a definition will end up in: its
     // canonical order, unless the rule can't rewrite it, which leaves it as
@@ -597,12 +604,10 @@ object DefinitionOrder {
     private def settledOrder(stat: Stat): Option[Ordered] =
       nested(stat).flatMap { scope =>
         val members = membersOf(scope)
-        val Ordered(items, order) = canonicalOrder(scope, members)
-        val canonical = order.flatMap(items(_).stats).map(_.pos.start)
-        val inOrder = canonical == members.map(_.stat.pos.start)
-        if (inOrder || obstacle(items, order).isEmpty)
-          Some(Ordered(items, order))
-        else None
+        Some(canonicalOrder(scope, members)).filter { ordered =>
+          isInOrder(members, ordered) ||
+          obstacle(ordered.items, ordered.order).isEmpty
+        }
       }
 
     private def membersOf(scope: Scope): List[Member] =
@@ -639,6 +644,12 @@ object DefinitionOrder {
         case _                => Nil
       }
 
+    // Whether the members are already written in the canonical order.
+    private def isInOrder(members: List[Member], ordered: Ordered): Boolean = {
+      val canonical = ordered.order.flatMap(ordered.items(_).stats)
+      canonical.map(_.pos.start) == members.map(_.stat.pos.start)
+    }
+
     private def covers(stat: Stat, offset: Int): Boolean =
       stat.pos.start <= offset && offset < stat.pos.end
 
@@ -653,14 +664,14 @@ object DefinitionOrder {
         .nextOption()
 
     // The strict vals a strict val's initialiser reads, directly or through
-    // what it runs, all of which have to be initialised before it. `runs`
+    // what it runs, all of which have to be initialised before it. `executed`
     // leaves out mentions that only name a type, which run nothing, but
     // follows the rest into a type: constructing a class runs its body, and
     // touching a companion initialises it.
     private def strictReads(
-        start: Int,
+        start: ItemId,
         items: Vector[Item],
-        runs: Vector[List[ItemId]]
+        executed: Vector[List[ItemId]]
     ): List[ItemId] = {
       @tailrec def loop(
           todo: List[ItemId],
@@ -671,9 +682,9 @@ object DefinitionOrder {
         case id :: rest =>
           if (seen(id) || id == start) loop(rest, seen, found)
           else if (items(id).isStrict) loop(rest, seen + id, id :: found)
-          else loop(runs(id) ++ rest, seen + id, found)
+          else loop(executed(id) ++ rest, seen + id, found)
       }
-      loop(runs(start), Set.empty, Nil)
+      loop(executed(start), Set.empty, Nil)
     }
 
     private def editsWithin(stat: Stat): List[Edit] =
@@ -688,11 +699,8 @@ object DefinitionOrder {
         case defn: Defn.ExtensionGroup => extensionMembers(defn)
         case _                         => Nil
       }
-      val fieldsFirst = stat match {
-        case _: Defn.Class | _: Defn.Trait | _: Defn.Enum => true
-        case _                                            => false
-      }
-      Some(Scope(stats, fieldsFirst = fieldsFirst)).filter(_.stats.nonEmpty)
+      Some(Scope(stats, fieldsFirst = isClassLike(stat)))
+        .filter(_.stats.nonEmpty)
     }
 
     // The whole run of definitions, rewritten in the canonical order with one
@@ -1055,6 +1063,13 @@ object DefinitionOrder {
       edges(id).distinct.foreach(to => from(to) = id :: from(to))
     }
     from.toVector
+  }
+
+  // A class, trait or enum: what has instances, fields, and a companion in
+  // SemanticDB even when none is written out.
+  private def isClassLike(stat: Stat): Boolean = stat match {
+    case _: Defn.Class | _: Defn.Trait | _: Defn.Enum => true
+    case _                                            => false
   }
 
   private def extensionMembers(defn: Defn.ExtensionGroup): List[Stat] =
