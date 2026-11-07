@@ -145,10 +145,10 @@ object DefinitionOrder {
 
     // The lines a `scalafix:ok` comment disables this rule on.
     private val okLines: List[Span] =
-      doc.tokens.toList
-        .collect { case comment: Token.Comment => comment }
-        .filter(isOkComment)
-        .map(comment => Span(lineStart(comment.start), comment.end))
+      doc.tokens.toList.collect {
+        case comment: Token.Comment if isOkComment(comment) =>
+          Span(lineStart(comment.start), comment.end)
+      }
 
     private val tokens: Vector[Token] = doc.tokens.toVector
 
