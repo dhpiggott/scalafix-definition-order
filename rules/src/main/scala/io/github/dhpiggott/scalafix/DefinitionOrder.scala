@@ -66,6 +66,10 @@ object DefinitionOrder {
     path.replace('\\', '/')
   }
 
+  // `fieldsFirst` is set for a class, trait or enum body, where strict vals
+  // and vars are an instance's state and go above everything else. A file's
+  // top level, an object and an extension block have no instance, so their
+  // vals are ordered by use like any other term.
   private final case class Scope(stats: List[Stat], fieldsFirst: Boolean)
 
   private final case class Member(stat: Stat, names: List[Name])
@@ -232,15 +236,19 @@ object DefinitionOrder {
       nested(stat).toList.flatMap(editsFor)
 
     private def nested(stat: Stat): Option[Scope] = {
-      val scope = stat match {
-        case defn: Defn.Object         => Scope(defn.templ.body.stats, false)
-        case defn: Defn.Class          => Scope(defn.templ.body.stats, true)
-        case defn: Defn.Trait          => Scope(defn.templ.body.stats, true)
-        case defn: Defn.Enum           => Scope(defn.templ.body.stats, true)
-        case defn: Defn.ExtensionGroup => Scope(extensionMembers(defn), false)
-        case _                         => Scope(Nil, false)
+      val stats = stat match {
+        case defn: Defn.Object         => defn.templ.body.stats
+        case defn: Defn.Class          => defn.templ.body.stats
+        case defn: Defn.Trait          => defn.templ.body.stats
+        case defn: Defn.Enum           => defn.templ.body.stats
+        case defn: Defn.ExtensionGroup => extensionMembers(defn)
+        case _                         => Nil
       }
-      Some(scope).filter(_.stats.nonEmpty)
+      val fieldsFirst = stat match {
+        case _: Defn.Class | _: Defn.Trait | _: Defn.Enum => true
+        case _                                            => false
+      }
+      Some(Scope(stats, fieldsFirst)).filter(_.stats.nonEmpty)
     }
 
     // The whole run of definitions, rewritten in the canonical order with one
