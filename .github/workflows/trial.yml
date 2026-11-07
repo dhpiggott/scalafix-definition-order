@@ -6,10 +6,13 @@ name: Trial
 # totals. The list is committed rather than a dispatch input, so nothing runs
 # that a reviewed commit didn't name.
 #
-# It runs on every pull request that could change what the rule does, so a
-# change's effect on real code is seen before it merges, and can be
-# dispatched by hand for anything else. It isn't a required check: a rewrite
-# you don't like is something to read, not a failure.
+# It runs by hand, and as a gate in release.yml, so nothing is published
+# that breaks a project's build. A job fails only when the rewrite breaks a
+# project that compiled before it; a rewrite you don't like is something to
+# read, not a failure.
+#
+# For now it also runs on pull requests that touch the rule, the build or the
+# trial itself, while the first runs are read; that trigger is temporary.
 on:
   pull_request:
     paths:
@@ -20,10 +23,7 @@ on:
       - .github/scripts/trial.sh
       - .github/workflows/trial.yml
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  workflow_call:
 
 permissions:
   contents: read

@@ -17,8 +17,15 @@ permissions:
   contents: read
 
 jobs:
+  # Runs the rule as built from this commit over the trial's projects, so
+  # nothing is published that breaks one of them.
+  trial:
+    name: Trial
+    uses: ./.github/workflows/trial.yml
+
   publish:
     name: Publish
+    needs: trial
     runs-on: ubuntu-latest
     # The signing key and Central token live in this environment rather than
     # the repository, so that only refs its deployment rules allow (v* tags

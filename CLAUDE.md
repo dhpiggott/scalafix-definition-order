@@ -34,9 +34,10 @@ when working on the rule itself.
 
 `trial.yml` builds the rule, runs it over each project in its matrix with
 `.github/scripts/trial.sh`, prints the rewrite and the diagnostics, and checks
-that the result still compiles. It runs on every pull request that touches the
-rule or the build, and can be dispatched by hand. It isn't a required check;
-after a change to the order, read the diffs it prints. Add a project to the
+that the result still compiles. It runs when dispatched by hand, and as a gate
+before every publish in `release.yml`, which it fails only if the rewrite
+breaks a project that compiled before it. After a change to the order,
+dispatch it and read the diffs it prints. Add a project to the
 matrix rather than passing one in, so everything it runs is named in a commit.
 
 ## Releasing
