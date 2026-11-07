@@ -19,6 +19,8 @@ object DefinitionOrderConfig {
   implicit val decoder: ConfDecoder[DefinitionOrderConfig] =
     metaconfig.generic.deriveDecoder(default)
 
+  // metaconfig's description of the config's fields (their names, types and
+  // defaults), which `deriveDecoder` reads `DefinitionOrder.exclude` by.
   implicit val surface: Surface[DefinitionOrderConfig] =
     metaconfig.generic.deriveSurface[DefinitionOrderConfig]
 }
@@ -117,6 +119,15 @@ object DefinitionOrder {
       symbols: Set[Symbol]
   )
 
+  // An item's index in its scope's `items`. Orders, edges and phases are made
+  // of these; most of the other Ints are offsets into the file.
+  private type ItemId = Int
+
+  // Part of a run of definitions: one definition's block, or a whole kept
+  // range's, along with the kept item it belongs to.
+  // A scope's items, and the order they go in (their ids, top to bottom).
+  private final case class Ordered(items: Vector[Item], order: List[ItemId])
+
   private final case class Edit(start: Int, end: Int, text: String)
 
   // Only a class, trait or enum body is `fieldsFirst`.
@@ -124,17 +135,19 @@ object DefinitionOrder {
 
   private final case class Member(stat: Stat, names: List[Name])
 
-  private final case class Mentions(used: List[Int], runs: List[Int])
+  private final case class Mentions(used: List[ItemId], runs: List[ItemId])
 
   // The depth-first walk. `pulls` are what an item needs directly above it
   // (types it names, strict vals its initialiser reads), placed just before
   // it; `children` are what it uses, each placed once everything that uses it
-  // outside its own cycle has been.
+  // outside its own cycle has been. `component(id)` numbers the cycle an item
+  // is in (its strongly connected component), so two items with the same
+  // number are in one cycle, and an item in no cycle has a number of its own.
   private final class Walk(
       items: Vector[Item],
-      pulls: Vector[List[Int]],
-      children: Vector[List[Int]],
-      waits: Vector[Set[Int]],
+      pulls: Vector[List[ItemId]],
+      children: Vector[List[ItemId]],
+      waits: Vector[Set[ItemId]],
       component: Vector[Int]
   ) {
 
@@ -142,12 +155,12 @@ object DefinitionOrder {
 
     private val pulled = pulls.flatten.toSet
 
-    private var reversed = List.empty[Int]
+    private var reversed = List.empty[ItemId]
 
     // Anything the walk didn't reach from a root, such as the members of a
     // cycle no root leads into: ready ones first, then in key order, leaving
     // what something pulls for that to place.
-    @tailrec def finish(phase: Set[Int]): Unit = {
+    @tailrec def finish(phase: Set[ItemId]): Unit = {
       val remaining = phase.filterNot(placed(_)).toList.sortBy(items(_).key)
       val candidates = remaining.filterNot(pulled)
       val next = candidates
@@ -162,7 +175,7 @@ object DefinitionOrder {
       }
     }
 
-    def visit(id: Int, phase: Set[Int]): Unit =
+    def visit(id: ItemId, phase: Set[ItemId]): Unit =
       if (!placed(id)) {
         val newlyPlaced = place(id, phase)
         val next = (id :: newlyPlaced.filter(_ != id)).flatMap(children(_))
@@ -173,7 +186,7 @@ object DefinitionOrder {
 
     // A pull from another phase waits for its own: fields come first even
     // when one names a type defined among the rest.
-    private def place(id: Int, phase: Set[Int]): List[Int] =
+    private def place(id: ItemId, phase: Set[ItemId]): List[ItemId] =
       if (placed(id)) Nil
       else {
         placed(id) = true
@@ -182,20 +195,35 @@ object DefinitionOrder {
         before :+ id
       }
 
-    def isReady(id: Int): Boolean =
+    def isReady(id: ItemId): Boolean =
       waits(id).forall(user => placed(user) || component(user) == component(id))
 
-    def isPulled(id: Int): Boolean = pulled(id)
+    def isPulled(id: ItemId): Boolean = pulled(id)
 
-    def order: List[Int] = reversed.reverse
+    def order: List[ItemId] = reversed.reverse
   }
 
-  // `runs` is false where the item is only named as a type.
-  private final case class Mention(item: Int, runs: Boolean)
+  private final case class InItem(position: Int) extends Place
 
-  // Part of a run of definitions: one definition's block, or a whole kept
-  // range's, along with the kept item it belongs to.
-  private final case class Piece(block: Span, keptItem: Option[Int])
+  // One step of where an offset will end up, outermost first: at that offset
+  // among what isn't an item (a definition's header, say, or anything inside
+  // a kept range, which keeps its written order), or inside the item at a
+  // position in its scope's settled order. A header comes before its body.
+  private sealed trait Place
+
+  private object Place {
+    implicit val ordering: Ordering[Place] = Ordering.by {
+      case InHeader(offset) => (0, offset)
+      case InItem(position) => (1, position)
+    }
+  }
+
+  private final case class InHeader(offset: Int) extends Place
+
+  // `runs` is false where the item is only named as a type.
+  private final case class Mention(item: ItemId, runs: Boolean)
+
+  private final case class Piece(block: Span, keptItem: Option[ItemId])
 
   // A scope's definitions as written: the pieces, the span from the first to
   // the last, the indent the first starts at, and the kept pieces.
@@ -205,6 +233,9 @@ object DefinitionOrder {
       indent: String,
       anchors: List[Piece]
   )
+
+  // Why a scope can't be rewritten, and the part of the file to report it at.
+  private final case class Obstacle(span: Span, message: String)
 
   private final class FileOrder(implicit doc: SemanticDocument) {
 
@@ -273,7 +304,7 @@ object DefinitionOrder {
     // Each scope's canonical order, keyed by the scope's own list of
     // statements: two scopes can be equal as trees, but never the same list.
     private val orders =
-      new java.util.IdentityHashMap[List[Stat], (Vector[Item], List[Int])]
+      new java.util.IdentityHashMap[List[Stat], Ordered]
 
     private var problems = List.empty[Patch]
 
@@ -311,7 +342,7 @@ object DefinitionOrder {
 
     private def editsFor(scope: Scope): List[Edit] = {
       val members = membersOf(scope)
-      val (items, order) = canonicalOrder(scope, members)
+      val Ordered(items, order) = canonicalOrder(scope, members)
       items.filter(_.kept.isDefined).foreach { item =>
         problems = Patch.lint(KeptAsWritten(item.stats.head.pos)) :: problems
       }
@@ -327,7 +358,7 @@ object DefinitionOrder {
     private def canonicalOrder(
         scope: Scope,
         members: List[Member]
-    ): (Vector[Item], List[Int]) =
+    ): Ordered =
       Option(orders.get(scope.stats)).getOrElse {
         val order = orderOf(scope, members)
         orders.put(scope.stats, order)
@@ -337,7 +368,7 @@ object DefinitionOrder {
     private def orderOf(
         scope: Scope,
         members: List[Member]
-    ): (Vector[Item], List[Int]) = {
+    ): Ordered = {
       val items = itemsOf(members)
       // Which item defines each symbol, so a mention leads to the item used.
       val owners = items.indices
@@ -385,7 +416,7 @@ object DefinitionOrder {
           .foreach(walk.visit(_, ids))
         walk.finish(ids)
       }
-      (items, walk.order)
+      Ordered(items, walk.order)
     }
 
     // Members grouped into items: everything in one kept range is one item
@@ -497,9 +528,9 @@ object DefinitionOrder {
     // them once the scopes nested in it are in order (see `settledKey`); and,
     // of those, the ones it mentions other than as a bare type.
     private def mentionsBy(
-        id: Int,
+        id: ItemId,
         items: Vector[Item],
-        owners: Map[Symbol, Int]
+        owners: Map[Symbol, ItemId]
     ): Mentions = {
       val stats = items(id).stats
       val named = stats
@@ -513,7 +544,7 @@ object DefinitionOrder {
       val kept = items(id).kept.isDefined
       val mentioned = (named ++ inferred)
         .sortBy { occurrence =>
-          if (kept) List((0, occurrence.offset))
+          if (kept) List(InHeader(occurrence.offset))
           else settledKey(stats, occurrence.offset)
         }
         .flatMap { occurrence =>
@@ -532,39 +563,40 @@ object DefinitionOrder {
     // order. A scope reads the order its items' bodies first mention things
     // in; read from the bodies as written, that would change once the bodies
     // were rewritten, and the next run would move the scope again.
-    private def settledKey(stats: List[Stat], offset: Int): List[(Int, Int)] =
+    private def settledKey(stats: List[Stat], offset: Int): List[Place] =
       stats.zipWithIndex
         .collectFirst {
           case (stat, index) if covers(stat, offset) =>
-            (1, index) :: keyWithin(stat, offset)
+            InItem(index) :: keyWithin(stat, offset)
         }
-        .getOrElse(List((0, offset)))
+        .getOrElse(List(InHeader(offset)))
 
     // Inside a definition, anything before its body (its header) comes first,
     // then its body's items in the order they will be in.
-    private def keyWithin(stat: Stat, offset: Int): List[(Int, Int)] =
+    private def keyWithin(stat: Stat, offset: Int): List[Place] =
       settledOrder(stat)
-        .flatMap { case (items, order) =>
+        .flatMap { case Ordered(items, order) =>
           order.zipWithIndex.collectFirst {
             case (id, position) if items(id).stats.exists(covers(_, offset)) =>
               val inside =
-                if (items(id).kept.isDefined) List((0, offset))
+                if (items(id).kept.isDefined) List(InHeader(offset))
                 else settledKey(items(id).stats, offset)
-              (1, position) :: inside
+              InItem(position) :: inside
           }
         }
-        .getOrElse(List((0, offset)))
+        .getOrElse(List(InHeader(offset)))
 
     // The order the scope nested in a definition will end up in: its
     // canonical order, unless the rule can't rewrite it, which leaves it as
     // written (None).
-    private def settledOrder(stat: Stat): Option[(Vector[Item], List[Int])] =
+    private def settledOrder(stat: Stat): Option[Ordered] =
       nested(stat).flatMap { scope =>
         val members = membersOf(scope)
-        val (items, order) = canonicalOrder(scope, members)
+        val Ordered(items, order) = canonicalOrder(scope, members)
         val canonical = order.flatMap(items(_).stats).map(_.pos.start)
         val inOrder = canonical == members.map(_.stat.pos.start)
-        if (inOrder || obstacle(items, order).isEmpty) Some((items, order))
+        if (inOrder || obstacle(items, order).isEmpty)
+          Some(Ordered(items, order))
         else None
       }
 
@@ -605,7 +637,10 @@ object DefinitionOrder {
     private def covers(stat: Stat, offset: Int): Boolean =
       stat.pos.start <= offset && offset < stat.pos.end
 
-    private def ownerIn(owners: Map[Symbol, Int], symbol: Symbol): Option[Int] =
+    private def ownerIn(
+        owners: Map[Symbol, ItemId],
+        symbol: Symbol
+    ): Option[ItemId] =
       Iterator
         .iterate(symbol)(_.owner)
         .takeWhile(s => !s.isNone && !s.isRootPackage && !s.isEmptyPackage)
@@ -620,13 +655,13 @@ object DefinitionOrder {
     private def strictReads(
         start: Int,
         items: Vector[Item],
-        runs: Vector[List[Int]]
-    ): List[Int] = {
+        runs: Vector[List[ItemId]]
+    ): List[ItemId] = {
       @tailrec def loop(
-          todo: List[Int],
-          seen: Set[Int],
-          found: List[Int]
-      ): List[Int] = todo match {
+          todo: List[ItemId],
+          seen: Set[ItemId],
+          found: List[ItemId]
+      ): List[ItemId] = todo match {
         case Nil        => found.reverse
         case id :: rest =>
           if (seen(id) || id == start) loop(rest, seen, found)
@@ -659,11 +694,11 @@ object DefinitionOrder {
     // blank line between them, or None, having reported why, if it can't be.
     private def reordered(
         items: Vector[Item],
-        order: List[Int]
+        order: List[ItemId]
     ): Option[List[Edit]] = {
       val Run(pieces, run, indent, anchors) = runOf(items)
       obstacle(items, order) match {
-        case Some((span, message)) =>
+        case Some(Obstacle(span, message)) =>
           report(Position.Range(doc.input, span.start, span.end), message)
           None
         case None =>
@@ -714,8 +749,8 @@ object DefinitionOrder {
     // of them has nowhere to go once they move.
     private def obstacle(
         items: Vector[Item],
-        order: List[Int]
-    ): Option[(Span, String)] = {
+        order: List[ItemId]
+    ): Option[Obstacle] = {
       val Run(pieces, run, indent, anchors) = runOf(items)
       val blocks = pieces.map(_.block)
       val gaps = blocks.zip(blocks.drop(1)).map { case (before, after) =>
@@ -727,30 +762,41 @@ object DefinitionOrder {
       blocked match {
         case Some(gap) =>
           Some(
-            Span(gap.start, gap.end.max(gap.start)) ->
-              ("These definitions are out of order, but something other than " +
+            Obstacle(
+              Span(gap.start, gap.end.max(gap.start)),
+              "These definitions are out of order, but something other than " +
                 "whitespace separates two of them, so they can't be moved " +
                 "automatically. A comment moves with the definition directly " +
-                "below it; one separated from it by a blank line doesn't.")
+                "below it; one separated from it by a blank line doesn't."
+            )
           )
         case None if indent.trim.nonEmpty =>
           Some(
-            run -> ("These definitions are out of order, but they don't start " +
-              "on a line of their own, so they can't be moved automatically.")
+            Obstacle(
+              run,
+              "These definitions are out of order, but they don't start " +
+                "on a line of their own, so they can't be moved automatically."
+            )
           )
         case None if suppressedWithin(run, anchors.map(_.block)) =>
           Some(
-            run -> ("These definitions are out of order, but one that would " +
-              "move holds a scalafix:off range or a scalafix:ok comment, and " +
-              "scalafix won't edit inside those. Move them by hand.")
+            Obstacle(
+              run,
+              "These definitions are out of order, but one that would " +
+                "move holds a scalafix:off range or a scalafix:ok comment, and " +
+                "scalafix won't edit inside those. Move them by hand."
+            )
           )
         case None
             if anchors.flatMap(_.keptItem) !=
               order.filter(items(_).kept.nonEmpty) =>
           Some(
-            run -> ("These definitions are out of order, and putting them in " +
-              "order would move one scalafix:off range past another, which " +
-              "the rule leaves in place. Move the ranges by hand.")
+            Obstacle(
+              run,
+              "These definitions are out of order, and putting them in " +
+                "order would move one scalafix:off range past another, which " +
+                "the rule leaves in place. Move the ranges by hand."
+            )
           )
         case None => None
       }
@@ -810,11 +856,11 @@ object DefinitionOrder {
 
     // The canonical order cut at each kept item, which stays where it is.
     private def splitAt(
-        order: List[Int],
+        order: List[ItemId],
         items: Vector[Item]
-    ): List[List[Int]] =
+    ): List[List[ItemId]] =
       order
-        .foldLeft(List(List.empty[Int])) { (groups, id) =>
+        .foldLeft(List(List.empty[ItemId])) { (groups, id) =>
           if (items(id).kept.isDefined) Nil :: groups
           else (id :: groups.head) :: groups.tail
         }
@@ -958,8 +1004,8 @@ object DefinitionOrder {
   // that goes above to the one that goes below.
   private def stronglyConnected(
       size: Int,
-      pulls: Vector[List[Int]],
-      children: Vector[List[Int]]
+      pulls: Vector[List[ItemId]],
+      children: Vector[List[ItemId]]
   ): Vector[Int] = {
     val pulledBy = reverse(pulls)
     val below = Vector.tabulate(size)(id => children(id) ++ pulledBy(id))
@@ -967,10 +1013,10 @@ object DefinitionOrder {
     val low = Array.fill(size)(0)
     val onStack = Array.fill(size)(false)
     val component = Array.fill(size)(0)
-    var stack = List.empty[Int]
+    var stack = List.empty[ItemId]
     var visited = 0
     var components = 0
-    def visit(id: Int): Unit = {
+    def visit(id: ItemId): Unit = {
       index(id) = visited
       low(id) = visited
       visited += 1
@@ -998,8 +1044,8 @@ object DefinitionOrder {
   }
 
   // For each item, the items whose edges point at it, in ascending order.
-  private def reverse(edges: Vector[List[Int]]): Vector[List[Int]] = {
-    val from = Array.fill(edges.size)(List.empty[Int])
+  private def reverse(edges: Vector[List[ItemId]]): Vector[List[ItemId]] = {
+    val from = Array.fill(edges.size)(List.empty[ItemId])
     edges.indices.reverse.foreach { id =>
       edges(id).distinct.foreach(to => from(to) = id :: from(to))
     }
