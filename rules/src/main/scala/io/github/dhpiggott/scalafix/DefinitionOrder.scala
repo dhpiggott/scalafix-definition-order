@@ -120,10 +120,13 @@ object DefinitionOrder {
 
     private var problems = List.empty[Patch]
 
+    // Declared before `keptRanges` and `okLines`, whose initialisers read it.
+    private val tokens: Vector[Token] = doc.tokens.toVector
+
     // The ranges a `scalafix:off` comment disables this rule for, from that
     // comment to the start of the `scalafix:on` that ends it.
     private val keptRanges: List[Span] = {
-      val markers = doc.tokens.toList.collect { case comment: Token.Comment =>
+      val markers = tokens.collect { case comment: Token.Comment =>
         comment.value.trim.split("[\\s,]+").toList match {
           case "scalafix:off" :: rules if appliesHere(rules) =>
             List(Marker(isOff = true, comment))
@@ -145,12 +148,10 @@ object DefinitionOrder {
 
     // The lines a `scalafix:ok` comment disables this rule on.
     private val okLines: List[Span] =
-      doc.tokens.toList.collect {
+      tokens.collect {
         case comment: Token.Comment if isOkComment(comment) =>
           Span(lineStart(comment.start), comment.end)
-      }
-
-    private val tokens: Vector[Token] = doc.tokens.toVector
+      }.toList
 
     private val tokenStarts: Array[Int] = tokens.map(_.start).toArray
 
