@@ -1,0 +1,56 @@
+name: Release
+
+# Every push to main publishes a snapshot, and a v* tag publishes that release
+# to Maven Central: sbt-ci-release decides which from whether HEAD is tagged.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+# One publish at a time, and none cancelled part-way: a cancelled upload can
+# leave a half-finished deployment on Central.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    # The signing key and Central token live in this environment rather than
+    # the repository, so that only refs its deployment rules allow (v* tags
+    # and main) can read them.
+    environment: release
+    # Unmeasured until the first publish: on top of the build, sbt-ci-release
+    # uploads the bundle and waits for Central to validate it, which can take
+    # several minutes. Tighten this once real runs show how long that is.
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          # sbt-ci-release takes the version from the tag history, through
+          # sbt-dynver. A shallow clone has no tags, so even a v* tag build
+          # would compute a 0.0.0+… version rather than the tag's.
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version-file: .java-version
+          cache: sbt
+
+      - name: Set up sbt
+        uses: sbt/setup-sbt@v1
+
+      - name: Publish
+        run: sbt --batch --no-colors ci-release
+        env:
+          PGP_PASSPHRASE: ${{ secrets.PGP_PASSPHRASE }}
+          PGP_SECRET: ${{ secrets.PGP_SECRET }}
+          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}

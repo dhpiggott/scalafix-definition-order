@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Cancel superseded PR builds, but never a build of main: those are the runs
+  # that save the dependency cache (setup-java's `cache: sbt`, below) that PR
+  # runs restore from, since a cache saved on one PR is invisible to others.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    # Runs take under a minute, even with nothing cached. Ten minutes leaves
+    # room for a slow cold start, and stops a hung job (the very first run hung
+    # silently after the formatting checks) long before GitHub's default of
+    # six hours.
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          # sbt-dynver derives `version` from the tag history, so a shallow
+          # clone silently produces 0.0.0+….
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version-file: .java-version
+          cache: sbt
+
+      - name: Set up sbt
+        uses: sbt/setup-sbt@v1
+
+      # The last check runs the rule, as built from this checkout, over its own
+      # sources (see `dogfood` in build.sbt).
+      - name: Check formatting, run the tests and check the rule's own order
+        run: >-
+          sbt --batch --no-colors scalafmtCheckAll scalafmtSbtCheck tests/test
+          "dogfood/scalafix --check DefinitionOrder"
