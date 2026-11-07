@@ -127,7 +127,7 @@ object DefinitionOrder {
     // comment to the start of the `scalafix:on` that ends it.
     private val keptRanges: List[Span] = {
       val markers = tokens.collect { case comment: Token.Comment =>
-        comment.value.trim.split("[\\s,]+").toList match {
+        wordsOf(comment) match {
           case "scalafix:off" :: rules if appliesHere(rules) =>
             List(Marker(isOff = true, comment))
           case "scalafix:on" :: rules if appliesHere(rules) =>
@@ -169,10 +169,16 @@ object DefinitionOrder {
       rules.isEmpty || rules.contains("DefinitionOrder")
 
     private def isOkComment(comment: Token.Comment): Boolean =
-      comment.value.trim.split("[\\s,]+").toList match {
+      wordsOf(comment) match {
         case "scalafix:ok" :: rules => appliesHere(rules)
         case _                      => false
       }
+
+    // A comment's words, split on runs of whitespace and commas, so that
+    // `// scalafix:off DefinitionOrder, Other` reads as `scalafix:off`,
+    // `DefinitionOrder` and `Other`.
+    private def wordsOf(comment: Token.Comment): List[String] =
+      comment.value.trim.split("[\\s,]+").toList
 
     // The moves are one atomic patch: each edit only makes sense with all the
     // others, so if scalafix would drop any part of one, it drops them all.
