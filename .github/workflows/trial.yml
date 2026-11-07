@@ -7,21 +7,10 @@ name: Trial
 # that a reviewed commit didn't name.
 #
 # It runs by hand, and as a gate in release.yml, so nothing is published
-# that breaks a project's build. A job fails only when the rewrite breaks a
-# project that compiled before it; a rewrite you don't like is something to
-# read, not a failure.
-#
-# For now it also runs on pull requests that touch the rule, the build or the
-# trial itself, while the first runs are read; that trigger is temporary.
+# that breaks a project's build. A job fails only when the rule didn't run, or
+# the rewrite breaks a project that compiled before it; a rewrite you don't
+# like is something to read, not a failure.
 on:
-  pull_request:
-    paths:
-      - rules/**
-      - build.sbt
-      - project/**
-      - .java-version
-      - .github/scripts/trial.sh
-      - .github/workflows/trial.yml
   workflow_dispatch:
   workflow_call:
 
