@@ -124,7 +124,10 @@ object DefinitionOrder {
     private val tokens: Vector[Token] = doc.tokens.toVector
 
     // The ranges a `scalafix:off` comment disables this rule for, from that
-    // comment to the start of the `scalafix:on` that ends it.
+    // comment to the end of the `scalafix:on` that ends it, or to the end of
+    // the file if nothing does. A `scalafix:on` with no range open, or a
+    // `scalafix:off` inside one, changes nothing; scalafix reports both as
+    // unused suppressions.
     private val keptRanges: List[Span] = {
       val markers = tokens.collect { case comment: Token.Comment =>
         wordsOf(comment) match {
