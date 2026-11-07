@@ -198,7 +198,7 @@ object DefinitionOrder {
       }
       val moves =
         if (unplaceable.nonEmpty) Patch.empty
-        else patches.flatMap(_._2).asPatch.atomic
+        else patches.flatMap { case (_, patch) => patch }.asPatch.atomic
       (moves :: problems).asPatch
     }
 
@@ -546,10 +546,12 @@ object DefinitionOrder {
         }
         .values
         .toVector
-        .sortBy(_.map(_._2).min)
+        .sortBy(group => group.map { case (_, index) => index }.min)
         .map { group =>
           val written =
-            group.sortBy(_._2).map { case (member, _) => member.stat }
+            group.sortBy { case (_, index) => index }.map { case (member, _) =>
+              member.stat
+            }
           val kept = keptRangeOf(written.head)
           val stats =
             if (kept.isDefined) written
