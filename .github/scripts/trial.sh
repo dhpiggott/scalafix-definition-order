@@ -5,6 +5,9 @@
 set -uo pipefail
 
 repo=$1
+# A fixed version that Maven Central can never serve, so the target build can
+# only resolve the rule just published locally. It also needs no tag history
+# or extra sbt run to work out, as sbt-dynver's version would.
 version=0.0.0-trial
 here=$(pwd)
 
