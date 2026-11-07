@@ -159,15 +159,23 @@ object DefinitionOrder {
 
     private val tokenStarts: Array[Int] = tokens.map(_.start).toArray
 
-    // Uses the compiler filled in, which the source never names, such as a
-    // given passed as a context argument. SemanticDB records each insertion
-    // as a synthetic: a tree of the inserted code with the original code it
-    // was inserted at inside it. Each symbol in the inserted part counts as
-    // mentioned at the start of that original code, so the definition that
-    // contains the code is its user. Without these a given used only
-    // implicitly would have no users at all. If a synthetic holds more than
-    // one piece of original code, the first is used: `originsOf` looks in an
-    // application's function before its arguments.
+    // Uses the source never spells out. In the Givens fixture,
+    //
+    //   given defaultShow: Show[Int] with ...
+    //   def describe(n: Int)(using s: Show[Int]): String = s.show(n)
+    //   def render: String = describe(1)
+    //
+    // `render` uses `defaultShow`, because the compiler turns `describe(1)`
+    // into `describe(1)(using defaultShow)`, but nothing in `render`'s source
+    // names it. SemanticDB records each such insertion as a synthetic: a tree
+    // of what was inserted (`defaultShow`), with the code it was attached to
+    // (`describe(1)`) inside it. Each symbol inserted counts as mentioned
+    // where that code starts, so whichever definition holds the code
+    // (`render`) is its user, and `defaultShow` goes below `render`. Without
+    // this, a given used only implicitly would have no users at all. If a
+    // synthetic holds more than one piece of original code, the first is
+    // used: `originsOf` looks in an application's function before its
+    // arguments.
     private val inferredUses: List[Occurrence] =
       doc.synthetics.toList.flatMap { synthetic =>
         originsOf(synthetic).headOption.toList.flatMap { origin =>
