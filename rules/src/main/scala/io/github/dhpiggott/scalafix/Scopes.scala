@@ -174,4 +174,12 @@ private[scalafix] object Scopes {
     val (packages, members) = stats.partition(_.isInstanceOf[Pkg])
     Scope(members, fieldsFirst = false) :: packages.flatMap(scopes)
   }
+
+  def templateOf(stat: Stat): Option[Template] = stat match {
+    case defn: Defn.Object => Some(defn.templ)
+    case defn: Defn.Class  => Some(defn.templ)
+    case defn: Defn.Trait  => Some(defn.templ)
+    case defn: Defn.Enum   => Some(defn.templ)
+    case _                 => None
+  }
 }

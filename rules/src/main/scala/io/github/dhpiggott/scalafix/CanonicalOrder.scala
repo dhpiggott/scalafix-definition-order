@@ -48,14 +48,25 @@ private[scalafix] final class CanonicalOrder(source: SourceText)(implicit
     val uses = items.indices.toVector.map { user =>
       mentions(user).used.filterNot(used => isField(used) && !isField(user))
     }
+    // A type's subtypes in the scope, which go below it even where it names
+    // them, as a sealed type's body often does: a hierarchy reads from the
+    // top.
+    val subtypes = Walk.reverse(
+      items.indices.toVector.map(supertypesOf(_, items, owners))
+    )
     // What has to sit directly above an item rather than below its users:
-    // the types it names and, for a strict val, every strict val its
-    // initialiser reads. Everything else it uses is a child, placed below.
+    // the types it names, other than its subtypes, and, for a strict val,
+    // every strict val its initialiser reads. Everything else it uses is a
+    // child, placed below. A subtype names its supertype where it extends
+    // it, so its supertype is always one of its pulls, and above it.
     val pulls = items.indices.toVector.map { user =>
       val reads =
         if (items(user).isStrict) strictReads(user, items, executed) else Nil
       val candidates = (uses(user) ++ reads).distinct
-      candidates.filter(used => items(used).isType || reads.contains(used))
+      candidates.filter { used =>
+        (items(used).isType && !subtypes(user).contains(used)) ||
+        reads.contains(used)
+      }
     }
     val children = items.indices.toVector.map { user =>
       uses(user).filterNot(pulls(user).contains)
@@ -213,6 +224,20 @@ private[scalafix] final class CanonicalOrder(source: SourceText)(implicit
         source.obstacle(ordered.items, ordered.order).isEmpty
       }
     }
+
+  // The items an item's classes, traits, enums and objects extend.
+  private def supertypesOf(
+      id: ItemId,
+      items: Vector[Item],
+      owners: Map[Symbol, ItemId]
+  ): List[ItemId] =
+    items(id).stats
+      .flatMap(templateOf)
+      .flatMap(_.inits)
+      .flatMap(_.tpe.collect { case name: Name => name.symbol })
+      .flatMap(ownerIn(owners, _))
+      .filter(_ != id)
+      .distinct
 
   private def ownerIn(
       owners: Map[Symbol, ItemId],

@@ -17,7 +17,8 @@ import scalafix.v1.*
 //     what an item uses in the order its body first mentions it, with any
 //     class or object body in it read in the order the rule puts it in.
 //   - A type, and a strict val another strict val's initialiser reads, goes
-//     immediately above the first item that needs it.
+//     immediately above the first item that needs it, except that a subtype
+//     goes below the type it extends, even where that type names it.
 //   - Roots, which nothing in the scope uses, come public before private and
 //     then by name; so does anything a cycle leaves undecided.
 //   - A class, trait or enum body puts its fields (strict vals and vars)

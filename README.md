@@ -73,7 +73,11 @@ extension block. Each scope has exactly one order:
 - **A type goes immediately above the first definition that names it.** Types
   are classes, traits, enums and type aliases. A class and its companion object
   are one definition, with the class first.
-- **Initialisation order beats both.** Top-level and object `val`s initialise
+- **A subtype goes below the type it extends**, when both are in the same
+  scope, even where the supertype's body names it, as a sealed type's often
+  does. Naming a subtype doesn't put it above the supertype; it goes below,
+  as a term would, so a hierarchy reads from the top.
+- **Initialisation order beats all three.** Top-level and object `val`s initialise
   in file order, so a strict `val` that an initialiser reads goes immediately
   above that initialiser. That holds whether the initialiser reads it directly
   or through what it runs, even where this puts the `val` above a `def` that
@@ -120,7 +124,9 @@ Where it goes its own way:
   cover it.
 - **Types.** A type goes immediately above the first definition that names it.
   The chapter doesn't say where types go. This is the closest match to its
-  advice to declare a variable close to where it is used.
+  advice to declare a variable close to where it is used. A subtype is the
+  exception: it goes below its supertype, so the abstraction comes before
+  what implements it, which is the chapter's general to specific.
 
 Vertical openness, vertical density and horizontal formatting, the rest of the
 chapter, are a formatter's job.
