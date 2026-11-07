@@ -10,6 +10,30 @@ import scalafix.lint.Diagnostic
 import scalafix.lint.LintSeverity
 import scalafix.v1._
 
+final case class DefinitionOrderConfig(exclude: List[String] = Nil)
+
+object DefinitionOrderConfig {
+  val default: DefinitionOrderConfig = DefinitionOrderConfig()
+
+  implicit val decoder: ConfDecoder[DefinitionOrderConfig] =
+    metaconfig.generic.deriveDecoder(default)
+
+  implicit val surface: Surface[DefinitionOrderConfig] =
+    metaconfig.generic.deriveSurface[DefinitionOrderConfig]
+}
+
+// Reported inside every kept range, where scalafix suppresses it. That is what
+// tells scalafix the `scalafix:off` comment was needed, rather than warning
+// that it suppressed nothing.
+final case class KeptAsWritten(position: Position) extends Diagnostic {
+  override def message: String =
+    "Kept in its written order by a scalafix:off comment."
+  override def severity: LintSeverity = LintSeverity.Info
+}
+
+final case class Misplaced(position: Position, message: String)
+    extends Diagnostic
+
 // Puts the definitions of each scope in one canonical order, worked out from
 // the code alone, so the order they start in never matters. A scope is a
 // file's top level, or the body of one object, class, trait, enum or extension
@@ -41,53 +65,40 @@ class DefinitionOrder(config: DefinitionOrderConfig)
 
   def this() = this(DefinitionOrderConfig.default)
 
+  override def fix(implicit doc: SemanticDocument): Patch = {
+    val path = DefinitionOrder.pathOf(doc)
+    if (config.exclude.exists(_.r.findFirstIn(path).isDefined)) Patch.empty
+    else new DefinitionOrder.FileOrder().patch
+  }
+
   override def withConfiguration(
       configuration: Configuration
   ): Configured[Rule] =
     configuration.conf
       .getOrElse("DefinitionOrder")(config)
       .map(new DefinitionOrder(_))
-
-  override def fix(implicit doc: SemanticDocument): Patch = {
-    val path = DefinitionOrder.pathOf(doc)
-    if (config.exclude.exists(_.r.findFirstIn(path).isDefined)) Patch.empty
-    else new DefinitionOrder.FileOrder().patch
-  }
 }
 
 object DefinitionOrder {
 
-  private def pathOf(doc: SemanticDocument): String = {
-    val path = doc.input match {
-      case Input.File(file, _)        => file.toString
-      case Input.VirtualFile(file, _) => file
-      case other                      => other.syntax
-    }
-    path.replace('\\', '/')
+  private final case class Occurrence(offset: Int, symbol: Symbol)
+
+  // Offsets into the file, end exclusive.
+  private final case class Span(start: Int, end: Int) {
+    def contains(other: Span): Boolean =
+      start <= other.start && other.end <= end
+
+    def overlaps(other: Span): Boolean = start < other.end && other.start < end
   }
+
+  private final case class Marker(isOff: Boolean, comment: Token.Comment)
+
+  private final case class Edit(start: Int, end: Int, text: String)
 
   // Only a class, trait or enum body is `fieldsFirst`.
   private final case class Scope(stats: List[Stat], fieldsFirst: Boolean)
 
   private final case class Member(stat: Stat, names: List[Name])
-
-  private final case class Edit(start: Int, end: Int, text: String)
-
-  // Offsets into the file, end exclusive.
-  private final case class Span(start: Int, end: Int) {
-    def overlaps(other: Span): Boolean = start < other.end && other.start < end
-    def contains(other: Span): Boolean =
-      start <= other.start && other.end <= end
-  }
-
-  private final case class Item(
-      stats: List[Stat],
-      kept: Option[Span],
-      key: SortKey,
-      isType: Boolean,
-      isStrict: Boolean,
-      symbols: Set[Symbol]
-  )
 
   // How whatever the uses leave open is ordered: public before private, then
   // by name, then by source text, which tells overloads apart.
@@ -102,14 +113,83 @@ object DefinitionOrder {
       Ordering.by(key => (key.isPrivate, key.name, key.source))
   }
 
-  private final case class Marker(isOff: Boolean, comment: Token.Comment)
+  private final case class Item(
+      stats: List[Stat],
+      kept: Option[Span],
+      key: SortKey,
+      isType: Boolean,
+      isStrict: Boolean,
+      symbols: Set[Symbol]
+  )
 
-  private final case class Occurrence(offset: Int, symbol: Symbol)
+  private final case class Mentions(used: List[Int], runs: List[Int])
+
+  // The depth-first walk. `pulls` are what an item needs directly above it
+  // (types it names, strict vals its initialiser reads), placed just before
+  // it; `children` are what it uses, each placed once everything that uses it
+  // outside its own cycle has been.
+  private final class Walk(
+      items: Vector[Item],
+      pulls: Vector[List[Int]],
+      children: Vector[List[Int]],
+      waits: Vector[Set[Int]],
+      component: Vector[Int]
+  ) {
+
+    private val placed = Array.fill(items.size)(false)
+
+    private val pulled = pulls.flatten.toSet
+
+    private var reversed = List.empty[Int]
+
+    // Anything the walk didn't reach from a root, such as the members of a
+    // cycle no root leads into: ready ones first, then in key order, leaving
+    // what something pulls for that to place.
+    @tailrec def finish(phase: Set[Int]): Unit = {
+      val remaining = phase.filterNot(placed(_)).toList.sortBy(items(_).key)
+      val candidates = remaining.filterNot(pulled)
+      val next = candidates
+        .find(isReady)
+        .orElse(candidates.headOption)
+        .orElse(remaining.headOption)
+      next match {
+        case Some(id) =>
+          visit(id, phase)
+          finish(phase)
+        case None => ()
+      }
+    }
+
+    def visit(id: Int, phase: Set[Int]): Unit =
+      if (!placed(id)) {
+        val newlyPlaced = place(id, phase)
+        val next = (id :: newlyPlaced.filter(_ != id)).flatMap(children(_))
+        next.distinct.foreach { child =>
+          if (phase(child) && isReady(child)) visit(child, phase)
+        }
+      }
+
+    // A pull from another phase waits for its own: fields come first even
+    // when one names a type defined among the rest.
+    private def place(id: Int, phase: Set[Int]): List[Int] =
+      if (placed(id)) Nil
+      else {
+        placed(id) = true
+        val before = pulls(id).filter(phase).flatMap(place(_, phase))
+        reversed = id :: reversed
+        before :+ id
+      }
+
+    def isReady(id: Int): Boolean =
+      waits(id).forall(user => placed(user) || component(user) == component(id))
+
+    def isPulled(id: Int): Boolean = pulled(id)
+
+    def order: List[Int] = reversed.reverse
+  }
 
   // `runs` is false where the item is only named as a type.
   private final case class Mention(item: Int, runs: Boolean)
-
-  private final case class Mentions(used: List[Int], runs: List[Int])
 
   // Part of a run of definitions: one definition's block, or a whole kept
   // range's, along with the kept item it belongs to.
@@ -117,12 +197,34 @@ object DefinitionOrder {
 
   private final class FileOrder(implicit doc: SemanticDocument) {
 
-    private val text: String = doc.input.text
-
-    private var problems = List.empty[Patch]
+    // Uses the source never spells out. In the Givens fixture,
+    //
+    //   given defaultShow: Show[Int] with ...
+    //   def describe(n: Int)(using s: Show[Int]): String = s.show(n)
+    //   def render: String = describe(1)
+    //
+    // `render` uses `defaultShow`, because the compiler turns `describe(1)`
+    // into `describe(1)(using defaultShow)`, but nothing in `render`'s source
+    // names it. SemanticDB records each such insertion as a synthetic: a tree
+    // of what was inserted (`defaultShow`), with the code it was attached to
+    // (`describe(1)`) inside it. Each symbol inserted counts as mentioned
+    // where that code starts, so whichever definition holds the code
+    // (`render`) is its user, and `defaultShow` goes below `render`. Without
+    // this, a given used only implicitly would have no users at all. If a
+    // synthetic holds more than one piece of original code, the first is
+    // used: `originsOf` looks in an application's function before its
+    // arguments.
+    private val inferredUses: List[Occurrence] =
+      doc.synthetics.toList.flatMap { synthetic =>
+        originsOf(synthetic).headOption.toList.flatMap { origin =>
+          symbolsIn(synthetic).map(Occurrence(origin, _))
+        }
+      }
 
     // Declared before `keptRanges` and `okLines`, whose initialisers read it.
     private val tokens: Vector[Token] = doc.tokens.toVector
+
+    private val text: String = doc.input.text
 
     // The ranges a `scalafix:off` comment disables this rule for, from that
     // comment to the end of the `scalafix:on` that ends it, or to the end of
@@ -157,46 +259,9 @@ object DefinitionOrder {
           Span(lineStart(comment.start), comment.end)
       }.toList
 
+    private var problems = List.empty[Patch]
+
     private val tokenStarts: Array[Int] = tokens.map(_.start).toArray
-
-    // Uses the source never spells out. In the Givens fixture,
-    //
-    //   given defaultShow: Show[Int] with ...
-    //   def describe(n: Int)(using s: Show[Int]): String = s.show(n)
-    //   def render: String = describe(1)
-    //
-    // `render` uses `defaultShow`, because the compiler turns `describe(1)`
-    // into `describe(1)(using defaultShow)`, but nothing in `render`'s source
-    // names it. SemanticDB records each such insertion as a synthetic: a tree
-    // of what was inserted (`defaultShow`), with the code it was attached to
-    // (`describe(1)`) inside it. Each symbol inserted counts as mentioned
-    // where that code starts, so whichever definition holds the code
-    // (`render`) is its user, and `defaultShow` goes below `render`. Without
-    // this, a given used only implicitly would have no users at all. If a
-    // synthetic holds more than one piece of original code, the first is
-    // used: `originsOf` looks in an application's function before its
-    // arguments.
-    private val inferredUses: List[Occurrence] =
-      doc.synthetics.toList.flatMap { synthetic =>
-        originsOf(synthetic).headOption.toList.flatMap { origin =>
-          symbolsIn(synthetic).map(Occurrence(origin, _))
-        }
-      }
-
-    private def appliesHere(rules: List[String]): Boolean =
-      rules.isEmpty || rules.contains("DefinitionOrder")
-
-    private def isOkComment(comment: Token.Comment): Boolean =
-      wordsOf(comment) match {
-        case "scalafix:ok" :: rules => appliesHere(rules)
-        case _                      => false
-      }
-
-    // A comment's words, split on runs of whitespace and commas, so that
-    // `// scalafix:off DefinitionOrder, Other` reads as `scalafix:off`,
-    // `DefinitionOrder` and `Other`.
-    private def wordsOf(comment: Token.Comment): List[String] =
-      comment.value.trim.split("[\\s,]+").toList
 
     // The moves are one atomic patch: each edit only makes sense with all the
     // others, so if scalafix would drop any part of one, it drops them all.
@@ -241,6 +306,256 @@ object DefinitionOrder {
       val canonical = order.flatMap(items(_).stats).map(_.pos.start)
       if (canonical == members.map(_.stat.pos.start)) nestedEdits.toList
       else reordered(items, order).getOrElse(nestedEdits.toList)
+    }
+
+    private def definedNames(stat: Stat): Option[List[Name]] = {
+      val names = stat match {
+        case defn: Defn.Def            => List(defn.name)
+        case defn: Defn.Val            => defn.pats.flatMap(patternNames)
+        case defn: Defn.Var            => defn.pats.flatMap(patternNames)
+        case defn: Defn.Type           => List(defn.name)
+        case defn: Defn.Class          => List(defn.name)
+        case defn: Defn.Trait          => List(defn.name)
+        case defn: Defn.Object         => List(defn.name)
+        case defn: Defn.Enum           => List(defn.name)
+        case defn: Defn.Given          => List(defn.name)
+        case defn: Defn.GivenAlias     => List(defn.name)
+        case defn: Defn.ExtensionGroup => extensionNames(defn)
+        case decl: Decl.Def            => List(decl.name)
+        case decl: Decl.Val            => decl.pats.flatMap(patternNames)
+        case decl: Decl.Type           => List(decl.name)
+        case _                         => Nil
+      }
+      Some(names.filter(_.value.nonEmpty)).filter(_.nonEmpty)
+    }
+
+    private def patternNames(pat: Pat): List[Name] =
+      pat.collect { case Pat.Var(name) => name }
+
+    private def extensionNames(defn: Defn.ExtensionGroup): List[Name] =
+      extensionMembers(defn).flatMap {
+        case member: Defn.Def => List(member.name)
+        case member: Decl.Def => List(member.name)
+        case _                => Nil
+      }
+
+    private def canonicalOrder(
+        scope: Scope,
+        members: List[Member]
+    ): (Vector[Item], List[Int]) = {
+      val items = itemsOf(members)
+      // Which item defines each symbol, so a mention leads to the item used.
+      val owners = items.indices
+        .flatMap(id => items(id).symbols.map(_ -> id))
+        .toMap
+      val mentions =
+        items.indices.toVector.map(mentionsBy(_, items, owners))
+      val runs = mentions.map(_.runs)
+      val isField = items.map(item => scope.fieldsFirst && item.isStrict)
+      // Fields come first whatever uses them, so a field used by something
+      // other than a field isn't placed below that user.
+      val uses = items.indices.toVector.map { user =>
+        mentions(user).used.filterNot(used => isField(used) && !isField(user))
+      }
+      // What has to sit directly above an item rather than below its users:
+      // the types it names and, for a strict val, every strict val its
+      // initialiser reads. Everything else it uses is a child, placed below.
+      val pulls = items.indices.toVector.map { user =>
+        val reads =
+          if (items(user).isStrict) strictReads(user, items, runs) else Nil
+        val candidates = (uses(user) ++ reads).distinct
+        candidates.filter(used => items(used).isType || reads.contains(used))
+      }
+      val children = items.indices.toVector.map { user =>
+        uses(user).filterNot(pulls(user).contains)
+      }
+      // An item waits for all its users to be placed, except those in its own
+      // cycle, which would otherwise wait for each other for ever.
+      val waits = reverse(children).map(_.toSet)
+      val component = stronglyConnected(items.size, pulls, children)
+      val walk = new Walk(items, pulls, children, waits, component)
+      val phases =
+        if (!scope.fieldsFirst) List(items.indices)
+        else {
+          val (fields, others) = items.indices.partition(isField)
+          List(fields, others)
+        }
+      // The walk starts from every root (ready, and not waiting to be pulled
+      // above something) in key order, then places whatever it didn't reach.
+      phases.foreach { phase =>
+        val ids = phase.toSet
+        phase
+          .filter(id => walk.isReady(id) && !walk.isPulled(id))
+          .sortBy(items(_).key)
+          .foreach(walk.visit(_, ids))
+        walk.finish(ids)
+      }
+      (items, walk.order)
+    }
+
+    // Members grouped into items: everything in one kept range is one item
+    // (keyed by a negative number, so it can't clash with an index), a class, trait
+    // or enum shares its name with its companion, and anything else is an
+    // item of its own. Items come in the order their first member was
+    // written, and a class goes before its companion.
+    private def itemsOf(members: List[Member]): Vector[Item] =
+      members.zipWithIndex
+        .groupBy { case (member, index) =>
+          keptRangeOf(member.stat) match {
+            case Some(range) => Right(-1 - keptRanges.indexOf(range))
+            case None        => companionKey(member, index)
+          }
+        }
+        .values
+        .toVector
+        .sortBy(group => group.map { case (_, index) => index }.min)
+        .map { group =>
+          val written =
+            group.sortBy { case (_, index) => index }.map { case (member, _) =>
+              member.stat
+            }
+          val kept = keptRangeOf(written.head)
+          val stats =
+            if (kept.isDefined) written
+            else
+              written
+                .sortBy(stat => if (stat.isInstanceOf[Defn.Object]) 1 else 0)
+          val names = group.flatMap { case (member, _) => member.names }
+          val symbols = group.flatMap { case (member, _) =>
+            member.names.flatMap { name =>
+              if (hasSyntheticCompanion(member.stat)) withCompanion(name.symbol)
+              else List(name.symbol)
+            }
+          }
+          val lead = stats.head
+          Item(
+            stats = stats,
+            kept = kept,
+            key = SortKey(
+              isPrivate = isPrivate(lead),
+              name = names.head.value,
+              source = text.substring(lead.pos.start, lead.pos.end)
+            ),
+            isType = stats.exists(isType),
+            isStrict = stats.exists(isStrict),
+            symbols = symbols.toSet
+          )
+        }
+
+    private def keptRangeOf(stat: Stat): Option[Span] =
+      keptRanges.find(_.contains(Span(stat.pos.start, stat.pos.end)))
+
+    private def companionKey(member: Member, index: Int): Either[String, Int] =
+      member.stat match {
+        case _: Defn.Object | _: Defn.Class | _: Defn.Trait | _: Defn.Enum =>
+          Left(member.names.head.value)
+        case _ => Right(index)
+      }
+
+    private def hasSyntheticCompanion(stat: Stat): Boolean = stat match {
+      case _: Defn.Class | _: Defn.Trait | _: Defn.Enum => true
+      case _                                            => false
+    }
+
+    // A class, trait or enum with no companion written out still has one in
+    // SemanticDB, and it is what `Type(...)` and `Type.Case` resolve to. A
+    // type alias has none, and an object of the same name is its own item.
+    private def withCompanion(symbol: Symbol): List[Symbol] =
+      List(symbol, Symbol(symbol.value.stripSuffix("#") + "."))
+
+    private def isPrivate(stat: Stat): Boolean =
+      modsOf(stat).exists {
+        case _: Mod.Private | _: Mod.Protected => true
+        case _                                 => false
+      }
+
+    private def modsOf(stat: Stat): List[Mod] = stat match {
+      case defn: Defn.Def        => defn.mods
+      case defn: Defn.Val        => defn.mods
+      case defn: Defn.Var        => defn.mods
+      case defn: Defn.Type       => defn.mods
+      case defn: Defn.Class      => defn.mods
+      case defn: Defn.Trait      => defn.mods
+      case defn: Defn.Object     => defn.mods
+      case defn: Defn.Enum       => defn.mods
+      case defn: Defn.Given      => defn.mods
+      case defn: Defn.GivenAlias => defn.mods
+      case decl: Decl.Def        => decl.mods
+      case decl: Decl.Val        => decl.mods
+      case decl: Decl.Type       => decl.mods
+      case _                     => Nil
+    }
+
+    private def isType(stat: Stat): Boolean = stat match {
+      case _: Defn.Class | _: Defn.Trait | _: Defn.Enum => true
+      case _: Defn.Type | _: Decl.Type                  => true
+      case _                                            => false
+    }
+
+    private def isStrict(stat: Stat): Boolean = stat match {
+      case defn: Defn.Val => !defn.mods.exists(_.isInstanceOf[Mod.Lazy])
+      case _: Defn.Var    => true
+      case _              => false
+    }
+
+    // The other items an item uses, in the order its body first mentions
+    // them; and, of those, the ones it mentions other than as a bare type.
+    private def mentionsBy(
+        id: Int,
+        items: Vector[Item],
+        owners: Map[Symbol, Int]
+    ): Mentions = {
+      val stats = items(id).stats
+      val named = stats
+        .flatMap(_.collect { case name: Name => name })
+        .map(name => Occurrence(name.pos.start, name.symbol))
+      val inferred = inferredUses.filter { use =>
+        stats.exists { stat =>
+          stat.pos.start <= use.offset && use.offset < stat.pos.end
+        }
+      }
+      val mentioned = (named ++ inferred)
+        .sortBy(_.offset)
+        .flatMap { occurrence =>
+          val runs = !occurrence.symbol.value.endsWith("#")
+          ownerIn(owners, occurrence.symbol).map(Mention(_, runs))
+        }
+        .filter(_.item != id)
+      Mentions(
+        used = mentioned.map(_.item).distinct,
+        runs = mentioned.filter(_.runs).map(_.item).distinct
+      )
+    }
+
+    private def ownerIn(owners: Map[Symbol, Int], symbol: Symbol): Option[Int] =
+      Iterator
+        .iterate(symbol)(_.owner)
+        .takeWhile(s => !s.isNone && !s.isRootPackage && !s.isEmptyPackage)
+        .flatMap(owners.get)
+        .nextOption()
+
+    // The strict vals a strict val's initialiser reads, directly or through
+    // what it runs, all of which have to be initialised before it. `runs`
+    // leaves out mentions that only name a type, which run nothing, but
+    // follows the rest into a type: constructing a class runs its body, and
+    // touching a companion initialises it.
+    private def strictReads(
+        start: Int,
+        items: Vector[Item],
+        runs: Vector[List[Int]]
+    ): List[Int] = {
+      @tailrec def loop(
+          todo: List[Int],
+          seen: Set[Int],
+          found: List[Int]
+      ): List[Int] = todo match {
+        case Nil        => found.reverse
+        case id :: rest =>
+          if (seen(id) || id == start) loop(rest, seen, found)
+          else if (items(id).isStrict) loop(rest, seen + id, id :: found)
+          else loop(runs(id) ++ rest, seen + id, found)
+      }
+      loop(runs(start), Set.empty, Nil)
     }
 
     private def editsWithin(stat: Stat): List[Edit] =
@@ -365,26 +680,6 @@ object DefinitionOrder {
       }
     }
 
-    // Whether a suppressed range overlaps the part of the run the rule would
-    // rewrite: all of the run except the anchors.
-    private def suppressedWithin(run: Span, anchors: List[Span]): Boolean =
-      (keptRanges ++ okLines).exists { range =>
-        range.overlaps(run) && !anchors.exists(_.contains(range))
-      }
-
-    // The canonical order cut at each kept item, which stays where it is.
-    private def splitAt(
-        order: List[Int],
-        items: Vector[Item]
-    ): List[List[Int]] =
-      order
-        .foldLeft(List(List.empty[Int])) { (groups, id) =>
-          if (items(id).kept.isDefined) Nil :: groups
-          else (id :: groups.head) :: groups.tail
-        }
-        .map(_.reverse)
-        .reverse
-
     // A kept item's block runs from its `scalafix:off` comment to the end of
     // its `scalafix:on` one, when those sit directly against it, so that
     // nothing the rule writes lands inside the range.
@@ -409,6 +704,26 @@ object DefinitionOrder {
 
     private def report(position: Position, message: String): Unit =
       problems = Patch.lint(Misplaced(position, message)) :: problems
+
+    // Whether a suppressed range overlaps the part of the run the rule would
+    // rewrite: all of the run except the anchors.
+    private def suppressedWithin(run: Span, anchors: List[Span]): Boolean =
+      (keptRanges ++ okLines).exists { range =>
+        range.overlaps(run) && !anchors.exists(_.contains(range))
+      }
+
+    // The canonical order cut at each kept item, which stays where it is.
+    private def splitAt(
+        order: List[Int],
+        items: Vector[Item]
+    ): List[List[Int]] =
+      order
+        .foldLeft(List(List.empty[Int])) { (groups, id) =>
+          if (items(id).kept.isDefined) Nil :: groups
+          else (id :: groups.head) :: groups.tail
+        }
+        .map(_.reverse)
+        .reverse
 
     private def render(stat: Stat): String = {
       val block = blockOf(stat)
@@ -500,255 +815,20 @@ object DefinitionOrder {
       search(0, tokenStarts.length)
     }
 
-    private def canonicalOrder(
-        scope: Scope,
-        members: List[Member]
-    ): (Vector[Item], List[Int]) = {
-      val items = itemsOf(members)
-      // Which item defines each symbol, so a mention leads to the item used.
-      val owners = items.indices
-        .flatMap(id => items(id).symbols.map(_ -> id))
-        .toMap
-      val mentions =
-        items.indices.toVector.map(mentionsBy(_, items, owners))
-      val runs = mentions.map(_.runs)
-      val isField = items.map(item => scope.fieldsFirst && item.isStrict)
-      // Fields come first whatever uses them, so a field used by something
-      // other than a field isn't placed below that user.
-      val uses = items.indices.toVector.map { user =>
-        mentions(user).used.filterNot(used => isField(used) && !isField(user))
-      }
-      // What has to sit directly above an item rather than below its users:
-      // the types it names and, for a strict val, every strict val its
-      // initialiser reads. Everything else it uses is a child, placed below.
-      val pulls = items.indices.toVector.map { user =>
-        val reads =
-          if (items(user).isStrict) strictReads(user, items, runs) else Nil
-        val candidates = (uses(user) ++ reads).distinct
-        candidates.filter(used => items(used).isType || reads.contains(used))
-      }
-      val children = items.indices.toVector.map { user =>
-        uses(user).filterNot(pulls(user).contains)
-      }
-      // An item waits for all its users to be placed, except those in its own
-      // cycle, which would otherwise wait for each other for ever.
-      val waits = reverse(children).map(_.toSet)
-      val component = stronglyConnected(items.size, pulls, children)
-      val walk = new Walk(items, pulls, children, waits, component)
-      val phases =
-        if (!scope.fieldsFirst) List(items.indices)
-        else {
-          val (fields, others) = items.indices.partition(isField)
-          List(fields, others)
-        }
-      // The walk starts from every root (ready, and not waiting to be pulled
-      // above something) in key order, then places whatever it didn't reach.
-      phases.foreach { phase =>
-        val ids = phase.toSet
-        phase
-          .filter(id => walk.isReady(id) && !walk.isPulled(id))
-          .sortBy(items(_).key)
-          .foreach(walk.visit(_, ids))
-        walk.finish(ids)
-      }
-      (items, walk.order)
-    }
-
-    // The strict vals a strict val's initialiser reads, directly or through
-    // what it runs, all of which have to be initialised before it. `runs`
-    // leaves out mentions that only name a type, which run nothing, but
-    // follows the rest into a type: constructing a class runs its body, and
-    // touching a companion initialises it.
-    private def strictReads(
-        start: Int,
-        items: Vector[Item],
-        runs: Vector[List[Int]]
-    ): List[Int] = {
-      @tailrec def loop(
-          todo: List[Int],
-          seen: Set[Int],
-          found: List[Int]
-      ): List[Int] = todo match {
-        case Nil        => found.reverse
-        case id :: rest =>
-          if (seen(id) || id == start) loop(rest, seen, found)
-          else if (items(id).isStrict) loop(rest, seen + id, id :: found)
-          else loop(runs(id) ++ rest, seen + id, found)
-      }
-      loop(runs(start), Set.empty, Nil)
-    }
-
-    // Members grouped into items: everything in one kept range is one item
-    // (keyed by a negative number, so it can't clash with an index), a class, trait
-    // or enum shares its name with its companion, and anything else is an
-    // item of its own. Items come in the order their first member was
-    // written, and a class goes before its companion.
-    private def itemsOf(members: List[Member]): Vector[Item] =
-      members.zipWithIndex
-        .groupBy { case (member, index) =>
-          keptRangeOf(member.stat) match {
-            case Some(range) => Right(-1 - keptRanges.indexOf(range))
-            case None        => companionKey(member, index)
-          }
-        }
-        .values
-        .toVector
-        .sortBy(group => group.map { case (_, index) => index }.min)
-        .map { group =>
-          val written =
-            group.sortBy { case (_, index) => index }.map { case (member, _) =>
-              member.stat
-            }
-          val kept = keptRangeOf(written.head)
-          val stats =
-            if (kept.isDefined) written
-            else
-              written
-                .sortBy(stat => if (stat.isInstanceOf[Defn.Object]) 1 else 0)
-          val names = group.flatMap { case (member, _) => member.names }
-          val symbols = group.flatMap { case (member, _) =>
-            member.names.flatMap { name =>
-              if (hasSyntheticCompanion(member.stat)) withCompanion(name.symbol)
-              else List(name.symbol)
-            }
-          }
-          val lead = stats.head
-          Item(
-            stats = stats,
-            kept = kept,
-            key = SortKey(
-              isPrivate = isPrivate(lead),
-              name = names.head.value,
-              source = text.substring(lead.pos.start, lead.pos.end)
-            ),
-            isType = stats.exists(isType),
-            isStrict = stats.exists(isStrict),
-            symbols = symbols.toSet
-          )
-        }
-
-    private def keptRangeOf(stat: Stat): Option[Span] =
-      keptRanges.find(_.contains(Span(stat.pos.start, stat.pos.end)))
-
-    // The other items an item uses, in the order its body first mentions
-    // them; and, of those, the ones it mentions other than as a bare type.
-    private def mentionsBy(
-        id: Int,
-        items: Vector[Item],
-        owners: Map[Symbol, Int]
-    ): Mentions = {
-      val stats = items(id).stats
-      val named = stats
-        .flatMap(_.collect { case name: Name => name })
-        .map(name => Occurrence(name.pos.start, name.symbol))
-      val inferred = inferredUses.filter { use =>
-        stats.exists { stat =>
-          stat.pos.start <= use.offset && use.offset < stat.pos.end
-        }
-      }
-      val mentioned = (named ++ inferred)
-        .sortBy(_.offset)
-        .flatMap { occurrence =>
-          val runs = !occurrence.symbol.value.endsWith("#")
-          ownerIn(owners, occurrence.symbol).map(Mention(_, runs))
-        }
-        .filter(_.item != id)
-      Mentions(
-        used = mentioned.map(_.item).distinct,
-        runs = mentioned.filter(_.runs).map(_.item).distinct
-      )
-    }
-
-    private def ownerIn(owners: Map[Symbol, Int], symbol: Symbol): Option[Int] =
-      Iterator
-        .iterate(symbol)(_.owner)
-        .takeWhile(s => !s.isNone && !s.isRootPackage && !s.isEmptyPackage)
-        .flatMap(owners.get)
-        .nextOption()
-
-    // A class, trait or enum with no companion written out still has one in
-    // SemanticDB, and it is what `Type(...)` and `Type.Case` resolve to. A
-    // type alias has none, and an object of the same name is its own item.
-    private def withCompanion(symbol: Symbol): List[Symbol] =
-      List(symbol, Symbol(symbol.value.stripSuffix("#") + "."))
-
-    private def hasSyntheticCompanion(stat: Stat): Boolean = stat match {
-      case _: Defn.Class | _: Defn.Trait | _: Defn.Enum => true
-      case _                                            => false
-    }
-
-    private def companionKey(member: Member, index: Int): Either[String, Int] =
-      member.stat match {
-        case _: Defn.Object | _: Defn.Class | _: Defn.Trait | _: Defn.Enum =>
-          Left(member.names.head.value)
-        case _ => Right(index)
+    private def isOkComment(comment: Token.Comment): Boolean =
+      wordsOf(comment) match {
+        case "scalafix:ok" :: rules => appliesHere(rules)
+        case _                      => false
       }
 
-    private def isType(stat: Stat): Boolean = stat match {
-      case _: Defn.Class | _: Defn.Trait | _: Defn.Enum => true
-      case _: Defn.Type | _: Decl.Type                  => true
-      case _                                            => false
-    }
+    // A comment's words, split on runs of whitespace and commas, so that
+    // `// scalafix:off DefinitionOrder, Other` reads as `scalafix:off`,
+    // `DefinitionOrder` and `Other`.
+    private def wordsOf(comment: Token.Comment): List[String] =
+      comment.value.trim.split("[\\s,]+").toList
 
-    private def isStrict(stat: Stat): Boolean = stat match {
-      case defn: Defn.Val => !defn.mods.exists(_.isInstanceOf[Mod.Lazy])
-      case _: Defn.Var    => true
-      case _              => false
-    }
-
-    private def isPrivate(stat: Stat): Boolean =
-      modsOf(stat).exists {
-        case _: Mod.Private | _: Mod.Protected => true
-        case _                                 => false
-      }
-
-    private def modsOf(stat: Stat): List[Mod] = stat match {
-      case defn: Defn.Def        => defn.mods
-      case defn: Defn.Val        => defn.mods
-      case defn: Defn.Var        => defn.mods
-      case defn: Defn.Type       => defn.mods
-      case defn: Defn.Class      => defn.mods
-      case defn: Defn.Trait      => defn.mods
-      case defn: Defn.Object     => defn.mods
-      case defn: Defn.Enum       => defn.mods
-      case defn: Defn.Given      => defn.mods
-      case defn: Defn.GivenAlias => defn.mods
-      case decl: Decl.Def        => decl.mods
-      case decl: Decl.Val        => decl.mods
-      case decl: Decl.Type       => decl.mods
-      case _                     => Nil
-    }
-
-    private def definedNames(stat: Stat): Option[List[Name]] = {
-      val names = stat match {
-        case defn: Defn.Def            => List(defn.name)
-        case defn: Defn.Val            => defn.pats.flatMap(patternNames)
-        case defn: Defn.Var            => defn.pats.flatMap(patternNames)
-        case defn: Defn.Type           => List(defn.name)
-        case defn: Defn.Class          => List(defn.name)
-        case defn: Defn.Trait          => List(defn.name)
-        case defn: Defn.Object         => List(defn.name)
-        case defn: Defn.Enum           => List(defn.name)
-        case defn: Defn.Given          => List(defn.name)
-        case defn: Defn.GivenAlias     => List(defn.name)
-        case defn: Defn.ExtensionGroup => extensionNames(defn)
-        case decl: Decl.Def            => List(decl.name)
-        case decl: Decl.Val            => decl.pats.flatMap(patternNames)
-        case decl: Decl.Type           => List(decl.name)
-        case _                         => Nil
-      }
-      Some(names.filter(_.value.nonEmpty)).filter(_.nonEmpty)
-    }
-
-    private def extensionNames(defn: Defn.ExtensionGroup): List[Name] =
-      extensionMembers(defn).flatMap {
-        case member: Defn.Def => List(member.name)
-        case member: Decl.Def => List(member.name)
-        case _                => Nil
-      }
-
-    private def patternNames(pat: Pat): List[Name] =
-      pat.collect { case Pat.Var(name) => name }
+    private def appliesHere(rules: List[String]): Boolean =
+      rules.isEmpty || rules.contains("DefinitionOrder")
   }
 
   // Where in the source a synthetic was inserted: the start of the
@@ -783,79 +863,6 @@ object DefinitionOrder {
       case block: Term.Block => block.stats
       case stat              => List(stat)
     }
-
-  // The depth-first walk. `pulls` are what an item needs directly above it
-  // (types it names, strict vals its initialiser reads), placed just before
-  // it; `children` are what it uses, each placed once everything that uses it
-  // outside its own cycle has been.
-  private final class Walk(
-      items: Vector[Item],
-      pulls: Vector[List[Int]],
-      children: Vector[List[Int]],
-      waits: Vector[Set[Int]],
-      component: Vector[Int]
-  ) {
-
-    private val placed = Array.fill(items.size)(false)
-
-    private val pulled = pulls.flatten.toSet
-
-    private var reversed = List.empty[Int]
-
-    def order: List[Int] = reversed.reverse
-
-    def isPulled(id: Int): Boolean = pulled(id)
-
-    def isReady(id: Int): Boolean =
-      waits(id).forall(user => placed(user) || component(user) == component(id))
-
-    def visit(id: Int, phase: Set[Int]): Unit =
-      if (!placed(id)) {
-        val newlyPlaced = place(id, phase)
-        val next = (id :: newlyPlaced.filter(_ != id)).flatMap(children(_))
-        next.distinct.foreach { child =>
-          if (phase(child) && isReady(child)) visit(child, phase)
-        }
-      }
-
-    // Anything the walk didn't reach from a root, such as the members of a
-    // cycle no root leads into: ready ones first, then in key order, leaving
-    // what something pulls for that to place.
-    @tailrec def finish(phase: Set[Int]): Unit = {
-      val remaining = phase.filterNot(placed(_)).toList.sortBy(items(_).key)
-      val candidates = remaining.filterNot(pulled)
-      val next = candidates
-        .find(isReady)
-        .orElse(candidates.headOption)
-        .orElse(remaining.headOption)
-      next match {
-        case Some(id) =>
-          visit(id, phase)
-          finish(phase)
-        case None => ()
-      }
-    }
-
-    // A pull from another phase waits for its own: fields come first even
-    // when one names a type defined among the rest.
-    private def place(id: Int, phase: Set[Int]): List[Int] =
-      if (placed(id)) Nil
-      else {
-        placed(id) = true
-        val before = pulls(id).filter(phase).flatMap(place(_, phase))
-        reversed = id :: reversed
-        before :+ id
-      }
-  }
-
-  // For each item, the items whose edges point at it, in ascending order.
-  private def reverse(edges: Vector[List[Int]]): Vector[List[Int]] = {
-    val from = Array.fill(edges.size)(List.empty[Int])
-    edges.indices.reverse.foreach { id =>
-      edges(id).distinct.foreach(to => from(to) = id :: from(to))
-    }
-    from.toVector
-  }
 
   // Tarjan's algorithm over both kinds of edge, each pointing from the item
   // that goes above to the one that goes below.
@@ -899,26 +906,22 @@ object DefinitionOrder {
     (0 until size).foreach(id => if (index(id) < 0) visit(id))
     component.toVector
   }
-}
 
-final case class DefinitionOrderConfig(exclude: List[String] = Nil)
+  // For each item, the items whose edges point at it, in ascending order.
+  private def reverse(edges: Vector[List[Int]]): Vector[List[Int]] = {
+    val from = Array.fill(edges.size)(List.empty[Int])
+    edges.indices.reverse.foreach { id =>
+      edges(id).distinct.foreach(to => from(to) = id :: from(to))
+    }
+    from.toVector
+  }
 
-object DefinitionOrderConfig {
-  val default: DefinitionOrderConfig = DefinitionOrderConfig()
-  implicit val surface: Surface[DefinitionOrderConfig] =
-    metaconfig.generic.deriveSurface[DefinitionOrderConfig]
-  implicit val decoder: ConfDecoder[DefinitionOrderConfig] =
-    metaconfig.generic.deriveDecoder(default)
-}
-
-final case class Misplaced(position: Position, message: String)
-    extends Diagnostic
-
-// Reported inside every kept range, where scalafix suppresses it. That is what
-// tells scalafix the `scalafix:off` comment was needed, rather than warning
-// that it suppressed nothing.
-final case class KeptAsWritten(position: Position) extends Diagnostic {
-  override def message: String =
-    "Kept in its written order by a scalafix:off comment."
-  override def severity: LintSeverity = LintSeverity.Info
+  private def pathOf(doc: SemanticDocument): String = {
+    val path = doc.input match {
+      case Input.File(file, _)        => file.toString
+      case Input.VirtualFile(file, _) => file
+      case other                      => other.syntax
+    }
+    path.replace('\\', '/')
+  }
 }
