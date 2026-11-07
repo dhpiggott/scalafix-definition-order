@@ -1,7 +1,7 @@
 package io.github.dhpiggott.scalafix
 
 import scala.annotation.tailrec
-import scala.math.Ordering.Implicits.seqOrdering
+import scala.math.Ordering.Implicits.*
 import scala.meta.Defn
 import scala.meta.Name
 import scala.meta.Stat
@@ -221,8 +221,7 @@ private[scalafix] final class CanonicalOrder(source: SourceText)(implicit
     Iterator
       .iterate(symbol)(_.owner)
       .takeWhile(s => !s.isNone && !s.isRootPackage && !s.isEmptyPackage)
-      .flatMap(owners.get)
-      .nextOption()
+      .collectFirst { case owner if owners.contains(owner) => owners(owner) }
 
   // The strict vals a strict val's initialiser reads, directly or through
   // what it runs, all of which have to be initialised before it. `executed`

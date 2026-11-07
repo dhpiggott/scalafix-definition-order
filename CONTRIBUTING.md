@@ -8,7 +8,7 @@ unless the rule should leave it unchanged, the expected result under the same
 name in `output/`. Then run
 
 ```
-sbt "scalafmtCheckAll; scalafmtSbtCheck; tests/testFull; dogfood/scalafix --check DefinitionOrder"
+sbt "scalafmtCheckAll; scalafmtSbtCheck; +rules/compile; tests/testFull; dogfood/scalafix --check DefinitionOrder"
 ```
 
 which is what CI runs. Pull requests are squash-merged.

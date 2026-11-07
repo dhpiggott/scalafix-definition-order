@@ -17,6 +17,8 @@ inThisBuild(
   )
 )
 
+lazy val scala212 = _root_.scalafix.sbt.BuildInfo.scala212
+
 lazy val scala213 = _root_.scalafix.sbt.BuildInfo.scala213
 
 lazy val scala3 = "3.10.0"
@@ -40,10 +42,13 @@ lazy val root = project
   .aggregate(rules, input, output, tests)
   .settings(publish / skip := true)
 
-// The rule, compiled for the Scala 2.13 that scalafix runs rules on.
+// The rule. Scalafix loads a rule built for the Scala 2 version of the project
+// it runs on (a Scala 3 project gets the 2.13 build), so it is published for
+// 2.12 as well, for builds such as sbt 1 plugins.
 lazy val rules = project
   .settings(
     moduleName := "scalafix-definition-order",
+    crossScalaVersions := List(scala213, scala212),
     libraryDependencies += "ch.epfl.scala" %% "scalafix-core" % scalafixVersion,
     scalacOptions ++= scala3Syntax
   )

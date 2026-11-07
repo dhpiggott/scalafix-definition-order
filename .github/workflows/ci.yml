@@ -47,7 +47,9 @@ jobs:
       # one command line, so a command taking arguments of its own has to be
       # separated from the rest with `;`. `testFull` rather than `test`,
       # which in sbt 2 skips tests whose inputs the restored cache has seen.
+      # `+rules/compile` compiles the rule for Scala 2.12 as well, which
+      # nothing else here does.
       - name: Check formatting, run the tests and check the rule's own order
         run: >-
           sbt --batch --no-colors
-          "scalafmtCheckAll; scalafmtSbtCheck; tests/testFull; dogfood/scalafix --check DefinitionOrder"
+          "scalafmtCheckAll; scalafmtSbtCheck; +rules/compile; tests/testFull; dogfood/scalafix --check DefinitionOrder"
