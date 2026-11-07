@@ -9,7 +9,7 @@ when working on the rule itself.
 - `rules/` is the rule, compiled for Scala 2.13 because that is what scalafix
   loads rules on. `input/` and `output/` are the testkit fixtures (Scala 3), and
   `tests/` runs them. CI runs
-  `sbt scalafmtCheckAll scalafmtSbtCheck tests/test "dogfood/scalafix --check DefinitionOrder"`
+  `sbt "scalafmtCheckAll; scalafmtSbtCheck; tests/testFull; dogfood/scalafix --check DefinitionOrder"`
   on Linux, so a cloud session can run it too. Maven Central sometimes answers a
   cold dependency download there with HTTP 429; retrying after a pause gets
   through, because what did download stays cached. The workflows all take

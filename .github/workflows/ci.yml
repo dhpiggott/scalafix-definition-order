@@ -43,8 +43,11 @@ jobs:
         uses: sbt/setup-sbt@v1
 
       # The last check runs the rule, as built from this checkout, over its own
-      # sources (see `dogfood` in build.sbt).
+      # sources (see `dogfood` in build.sbt). sbt 2 joins its arguments into
+      # one command line, so a command taking arguments of its own has to be
+      # separated from the rest with `;`. `testFull` rather than `test`,
+      # which in sbt 2 skips tests whose inputs the restored cache has seen.
       - name: Check formatting, run the tests and check the rule's own order
         run: >-
-          sbt --batch --no-colors scalafmtCheckAll scalafmtSbtCheck tests/test
-          "dogfood/scalafix --check DefinitionOrder"
+          sbt --batch --no-colors
+          "scalafmtCheckAll; scalafmtSbtCheck; tests/testFull; dogfood/scalafix --check DefinitionOrder"
