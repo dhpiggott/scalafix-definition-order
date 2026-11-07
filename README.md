@@ -168,7 +168,10 @@ DefinitionOrder.exclude = ["src/main/scala/vendored/", "/Generated\\.scala$"]
 
 - The rule only sees uses that SemanticDB records. That includes what the
   compiler fills in, read from SemanticDB's synthetics, so a `given` passed as
-  a context argument counts as used where it is passed.
+  a context argument counts as used where it is passed. One gap: in Scala
+  2.13, SemanticDB doesn't record an implicit argument passed to a macro, such
+  as the `Surface` that metaconfig's `deriveDecoder` takes, so the rule can't
+  see that use.
 - A use from another scope doesn't count. Initialisation order across scopes is
   still yours to watch.
 
