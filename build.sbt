@@ -82,10 +82,14 @@ lazy val tests = project
 
 // The rule's own sources, compiled a second time with SemanticDB so the rule
 // can be run over them. Scalafix can't load a rule into the project that
-// compiles it, but it can load one from another project in the build, which
-// is what `rules % ScalafixConfig` does. So this project borrows `rules`'
-// sources rather than having any of its own, and `dogfood/scalafix` checks
-// them with the rule as it stands in the checkout.
+// compiles it, but it can load one from another project in the build. That's
+// what `rules % ScalafixConfig` does: sbt-scalafix gives every project a
+// ScalafixConfig configuration whose classpath is where scalafix looks for
+// rules, and `% ScalafixConfig` puts the compiled `rules` project on that
+// classpath instead of on this project's Compile classpath. So this project
+// borrows `rules`' sources rather than having any of its own, and
+// `dogfood/scalafix` checks them with the rule as it stands in the checkout,
+// compiling `rules` first if it has changed.
 lazy val dogfood = project
   .dependsOn(rules % ScalafixConfig)
   .settings(
