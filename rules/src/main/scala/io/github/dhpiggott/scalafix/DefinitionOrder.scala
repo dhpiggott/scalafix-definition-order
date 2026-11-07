@@ -66,10 +66,7 @@ object DefinitionOrder {
     path.replace('\\', '/')
   }
 
-  // `fieldsFirst` is set for a class, trait or enum body, where strict vals
-  // and vars are an instance's state and go above everything else. A file's
-  // top level, an object and an extension block have no instance, so their
-  // vals are ordered by use like any other term.
+  // Only a class, trait or enum body is `fieldsFirst`.
   private final case class Scope(stats: List[Stat], fieldsFirst: Boolean)
 
   private final case class Member(stat: Stat, names: List[Name])
@@ -162,9 +159,15 @@ object DefinitionOrder {
 
     private val tokenStarts: Array[Int] = tokens.map(_.start).toArray
 
-    // What the compiler filled in, such as a given passed as a context
-    // argument, at the offset of the code it was filled in for. Without these
-    // a given used only implicitly would have no users at all.
+    // Uses the compiler filled in, which the source never names, such as a
+    // given passed as a context argument. SemanticDB records each insertion
+    // as a synthetic: a tree of the inserted code with the original code it
+    // was inserted at inside it. Each symbol in the inserted part counts as
+    // mentioned at the start of that original code, so the definition that
+    // contains the code is its user. Without these a given used only
+    // implicitly would have no users at all. If a synthetic holds more than
+    // one piece of original code, the first is used: `originsOf` looks in an
+    // application's function before its arguments.
     private val inferredUses: List[Occurrence] =
       doc.synthetics.toList.flatMap { synthetic =>
         originsOf(synthetic).headOption.toList.flatMap { origin =>
@@ -253,9 +256,7 @@ object DefinitionOrder {
 
     // The whole run of definitions, rewritten in the canonical order with one
     // blank line between them. Only whitespace may separate them: anything
-    // else between two definitions has nowhere to go once they move. A kept
-    // range stays exactly where it is, and what falls between kept ranges is
-    // rewritten around them.
+    // else between two definitions has nowhere to go once they move.
     private def reordered(
         items: Vector[Item],
         order: List[Int]
@@ -314,6 +315,9 @@ object DefinitionOrder {
           )
           None
         case None =>
+          // The kept ranges stay put and cut the run into segments: before
+          // the first, between each pair, and after the last. The canonical
+          // order is cut at the same kept items, so segment n gets group n.
           val separator = "\n\n" + indent
           val bounds = run.start :: anchors.flatMap { anchor =>
             List(anchor.block.start, anchor.block.end)
@@ -331,9 +335,15 @@ object DefinitionOrder {
                       block.start < segment.end =>
                   block.start
               }
+              // A segment already in order keeps its text, and only what
+              // changes inside its definitions is edited.
               if (written == stats.map(blockOf(_).start))
                 stats.flatMap(editsWithin)
               else {
+                // The run's first and last segments border text outside it,
+                // which has its own spacing; every other segment sits between
+                // two kept ranges and needs a blank line on each side, or
+                // just one between them if it's left empty.
                 val body = stats.map(render).mkString(separator)
                 val rendered =
                   if (body.isEmpty) {
@@ -417,6 +427,9 @@ object DefinitionOrder {
       Span(leadingStart(stat.pos.start), end)
     }
 
+    // Walks up from a definition's first line over the comments directly
+    // above it: `//` lines, and `/* */` blocks that start a line of their own.
+    // A blank line or code stops it.
     @tailrec private def leadingStart(start: Int): Int = {
       val currentLine = lineStart(start)
       if (currentLine == 0 || text.substring(currentLine, start).trim.nonEmpty)
@@ -438,6 +451,10 @@ object DefinitionOrder {
     private def lineStart(offset: Int): Int =
       text.lastIndexOf('\n', offset - 1) + 1
 
+    // Scalafix patches whole tokens, so a replacement becomes the first token
+    // it covers replaced with the new text and the rest removed. That only
+    // works if the edit starts exactly on a token; None means it doesn't. An
+    // edit covering nothing is an insertion.
     private def toPatch(edit: Edit): Option[Patch] =
       if (edit.start == edit.end) insertAt(edit.start, edit.text)
       else {
@@ -480,6 +497,7 @@ object DefinitionOrder {
         members: List[Member]
     ): (Vector[Item], List[Int]) = {
       val items = itemsOf(members)
+      // Which item defines each symbol, so a mention leads to the item used.
       val owners = items.indices
         .flatMap(id => items(id).symbols.map(_ -> id))
         .toMap
@@ -487,9 +505,14 @@ object DefinitionOrder {
         items.indices.toVector.map(mentionsBy(_, items, owners))
       val runs = mentions.map(_.runs)
       val isField = items.map(item => scope.fieldsFirst && item.isStrict)
+      // Fields come first whatever uses them, so a field used by something
+      // other than a field isn't placed below that user.
       val uses = items.indices.toVector.map { user =>
         mentions(user).used.filterNot(used => isField(used) && !isField(user))
       }
+      // What has to sit directly above an item rather than below its users:
+      // the types it names and, for a strict val, every strict val its
+      // initialiser reads. Everything else it uses is a child, placed below.
       val pulls = items.indices.toVector.map { user =>
         val reads =
           if (items(user).isStrict) strictReads(user, items, runs) else Nil
@@ -499,6 +522,8 @@ object DefinitionOrder {
       val children = items.indices.toVector.map { user =>
         uses(user).filterNot(pulls(user).contains)
       }
+      // An item waits for all its users to be placed, except those in its own
+      // cycle, which would otherwise wait for each other for ever.
       val waits = reverse(children).map(_.toSet)
       val component = stronglyConnected(items.size, pulls, children)
       val walk = new Walk(items, pulls, children, waits, component)
@@ -508,6 +533,8 @@ object DefinitionOrder {
           val (fields, others) = items.indices.partition(isField)
           List(fields, others)
         }
+      // The walk starts from every root (ready, and not waiting to be pulled
+      // above something) in key order, then places whatever it didn't reach.
       phases.foreach { phase =>
         val ids = phase.toSet
         phase
@@ -543,7 +570,11 @@ object DefinitionOrder {
       loop(runs(start), Set.empty, Nil)
     }
 
-    // A class and its companion are one item, class first.
+    // Members grouped into items: everything in one kept range is one item
+    // (keyed by a negative number, so it can't clash with an index), a class, trait
+    // or enum shares its name with its companion, and anything else is an
+    // item of its own. Items come in the order their first member was
+    // written, and a class goes before its companion.
     private def itemsOf(members: List[Member]): Vector[Item] =
       members.zipWithIndex
         .groupBy { case (member, index) =>
@@ -712,8 +743,9 @@ object DefinitionOrder {
       pat.collect { case Pat.Var(name) => name }
   }
 
-  // Where in the source a synthetic was inferred, from the original code it
-  // wraps.
+  // Where in the source a synthetic was inserted: the start of the
+  // `OriginalTree` or `OriginalSubTree` inside it, which stands for the code
+  // as written. The other cases only look further in.
   private def originsOf(tree: SemanticTree): List[Int] = tree match {
     case OriginalTree(original)        => List(original.pos.start)
     case OriginalSubTree(original)     => List(original.pos.start)
@@ -725,6 +757,9 @@ object DefinitionOrder {
     case _                             => Nil
   }
 
+  // The symbols of the inserted code: every `IdTree` in a synthetic. The
+  // original code inside it is skipped, since the names written there are
+  // already mentions in their own right.
   private def symbolsIn(tree: SemanticTree): List[Symbol] = tree match {
     case id: IdTree                    => List(id.symbol)
     case SelectTree(qualifier, id)     => symbolsIn(qualifier) :+ id.symbol
