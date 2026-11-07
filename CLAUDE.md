@@ -32,11 +32,12 @@ when working on the rule itself.
 
 ## Trying it on other projects
 
-`trial.yml` (dispatched by hand) builds the rule from the dispatched ref, runs
-it over each project in its matrix with `.github/scripts/trial.sh`, prints the
-rewrite and the diagnostics, and checks that the result still compiles. Run it
-after a change to the order and read the diffs. Add a project to the matrix
-rather than passing one in, so everything it runs is named in a commit.
+`trial.yml` builds the rule, runs it over each project in its matrix with
+`.github/scripts/trial.sh`, prints the rewrite and the diagnostics, and checks
+that the result still compiles. It runs on every pull request that touches the
+rule or the build, and can be dispatched by hand. It isn't a required check;
+after a change to the order, read the diffs it prints. Add a project to the
+matrix rather than passing one in, so everything it runs is named in a commit.
 
 ## Releasing
 

@@ -1,12 +1,29 @@
 name: Trial
 
-# Runs the rule, built from the dispatched ref, over a few other projects, to
+# Runs the rule, built from the checked-out ref, over a few other projects, to
 # see what it does to code it wasn't written against. Each job prints the
 # rewrite and checks that the result still compiles; the job summary has the
 # totals. The list is committed rather than a dispatch input, so nothing runs
 # that a reviewed commit didn't name.
+#
+# It runs on every pull request that could change what the rule does, so a
+# change's effect on real code is seen before it merges, and can be
+# dispatched by hand for anything else. It isn't a required check: a rewrite
+# you don't like is something to read, not a failure.
 on:
+  pull_request:
+    paths:
+      - rules/**
+      - build.sbt
+      - project/**
+      - .java-version
+      - .github/scripts/trial.sh
+      - .github/workflows/trial.yml
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
