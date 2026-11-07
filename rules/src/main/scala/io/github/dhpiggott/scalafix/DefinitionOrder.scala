@@ -1,6 +1,7 @@
 package io.github.dhpiggott.scalafix
 
 import scala.annotation.tailrec
+import scala.math.Ordering.Implicits.seqOrdering
 import scala.meta._
 
 import metaconfig.ConfDecoder
@@ -43,7 +44,8 @@ final case class Misplaced(position: Position, message: String)
 //
 //   - A term goes below everything that uses it, and is placed as soon as
 //     everything that uses it has been: depth first from each root, visiting
-//     what an item uses in the order its body first mentions it.
+//     what an item uses in the order its body first mentions it, with any
+//     class or object body in it read in the order the rule puts it in.
 //   - A type, and a strict val another strict val's initialiser reads, goes
 //     immediately above the first item that needs it.
 //   - Roots, which nothing in the scope uses, come public before private and
@@ -93,13 +95,6 @@ object DefinitionOrder {
 
   private final case class Marker(isOff: Boolean, comment: Token.Comment)
 
-  private final case class Edit(start: Int, end: Int, text: String)
-
-  // Only a class, trait or enum body is `fieldsFirst`.
-  private final case class Scope(stats: List[Stat], fieldsFirst: Boolean)
-
-  private final case class Member(stat: Stat, names: List[Name])
-
   // How whatever the uses leave open is ordered: public before private, then
   // by name, then by source text, which tells overloads apart.
   private final case class SortKey(
@@ -121,6 +116,13 @@ object DefinitionOrder {
       isStrict: Boolean,
       symbols: Set[Symbol]
   )
+
+  private final case class Edit(start: Int, end: Int, text: String)
+
+  // Only a class, trait or enum body is `fieldsFirst`.
+  private final case class Scope(stats: List[Stat], fieldsFirst: Boolean)
+
+  private final case class Member(stat: Stat, names: List[Name])
 
   private final case class Mentions(used: List[Int], runs: List[Int])
 
@@ -195,6 +197,15 @@ object DefinitionOrder {
   // range's, along with the kept item it belongs to.
   private final case class Piece(block: Span, keptItem: Option[Int])
 
+  // A scope's definitions as written: the pieces, the span from the first to
+  // the last, the indent the first starts at, and the kept pieces.
+  private final case class Run(
+      pieces: List[Piece],
+      span: Span,
+      indent: String,
+      anchors: List[Piece]
+  )
+
   private final class FileOrder(implicit doc: SemanticDocument) {
 
     // Uses the source never spells out. In the Givens fixture,
@@ -259,6 +270,11 @@ object DefinitionOrder {
           Span(lineStart(comment.start), comment.end)
       }.toList
 
+    // Each scope's canonical order, keyed by the scope's own list of
+    // statements: two scopes can be equal as trees, but never the same list.
+    private val orders =
+      new java.util.IdentityHashMap[List[Stat], (Vector[Item], List[Int])]
+
     private var problems = List.empty[Patch]
 
     private val tokenStarts: Array[Int] = tokens.map(_.start).toArray
@@ -294,9 +310,7 @@ object DefinitionOrder {
     }
 
     private def editsFor(scope: Scope): List[Edit] = {
-      val members = scope.stats.flatMap { stat =>
-        definedNames(stat).map(Member(stat, _))
-      }
+      val members = membersOf(scope)
       val (items, order) = canonicalOrder(scope, members)
       items.filter(_.kept.isDefined).foreach { item =>
         problems = Patch.lint(KeptAsWritten(item.stats.head.pos)) :: problems
@@ -308,38 +322,19 @@ object DefinitionOrder {
       else reordered(items, order).getOrElse(nestedEdits.toList)
     }
 
-    private def definedNames(stat: Stat): Option[List[Name]] = {
-      val names = stat match {
-        case defn: Defn.Def            => List(defn.name)
-        case defn: Defn.Val            => defn.pats.flatMap(patternNames)
-        case defn: Defn.Var            => defn.pats.flatMap(patternNames)
-        case defn: Defn.Type           => List(defn.name)
-        case defn: Defn.Class          => List(defn.name)
-        case defn: Defn.Trait          => List(defn.name)
-        case defn: Defn.Object         => List(defn.name)
-        case defn: Defn.Enum           => List(defn.name)
-        case defn: Defn.Given          => List(defn.name)
-        case defn: Defn.GivenAlias     => List(defn.name)
-        case defn: Defn.ExtensionGroup => extensionNames(defn)
-        case decl: Decl.Def            => List(decl.name)
-        case decl: Decl.Val            => decl.pats.flatMap(patternNames)
-        case decl: Decl.Type           => List(decl.name)
-        case _                         => Nil
-      }
-      Some(names.filter(_.value.nonEmpty)).filter(_.nonEmpty)
-    }
-
-    private def patternNames(pat: Pat): List[Name] =
-      pat.collect { case Pat.Var(name) => name }
-
-    private def extensionNames(defn: Defn.ExtensionGroup): List[Name] =
-      extensionMembers(defn).flatMap {
-        case member: Defn.Def => List(member.name)
-        case member: Decl.Def => List(member.name)
-        case _                => Nil
-      }
-
+    // Worked out once per scope: the scope around it reads it too (see
+    // `settledKey`).
     private def canonicalOrder(
+        scope: Scope,
+        members: List[Member]
+    ): (Vector[Item], List[Int]) =
+      Option(orders.get(scope.stats)).getOrElse {
+        val order = orderOf(scope, members)
+        orders.put(scope.stats, order)
+        order
+      }
+
+    private def orderOf(
         scope: Scope,
         members: List[Member]
     ): (Vector[Item], List[Int]) = {
@@ -499,7 +494,8 @@ object DefinitionOrder {
     }
 
     // The other items an item uses, in the order its body first mentions
-    // them; and, of those, the ones it mentions other than as a bare type.
+    // them once the scopes nested in it are in order (see `settledKey`); and,
+    // of those, the ones it mentions other than as a bare type.
     private def mentionsBy(
         id: Int,
         items: Vector[Item],
@@ -514,8 +510,12 @@ object DefinitionOrder {
           stat.pos.start <= use.offset && use.offset < stat.pos.end
         }
       }
+      val kept = items(id).kept.isDefined
       val mentioned = (named ++ inferred)
-        .sortBy(_.offset)
+        .sortBy { occurrence =>
+          if (kept) List((0, occurrence.offset))
+          else settledKey(stats, occurrence.offset)
+        }
         .flatMap { occurrence =>
           val runs = !occurrence.symbol.value.endsWith("#")
           ownerIn(owners, occurrence.symbol).map(Mention(_, runs))
@@ -526,6 +526,84 @@ object DefinitionOrder {
         runs = mentioned.filter(_.runs).map(_.item).distinct
       )
     }
+
+    // Where an offset among `stats` will be once every scope nested in them is
+    // in the order this run of the rule writes, as a key that sorts in that
+    // order. A scope reads the order its items' bodies first mention things
+    // in; read from the bodies as written, that would change once the bodies
+    // were rewritten, and the next run would move the scope again.
+    private def settledKey(stats: List[Stat], offset: Int): List[(Int, Int)] =
+      stats.zipWithIndex
+        .collectFirst {
+          case (stat, index) if covers(stat, offset) =>
+            (1, index) :: keyWithin(stat, offset)
+        }
+        .getOrElse(List((0, offset)))
+
+    // Inside a definition, anything before its body (its header) comes first,
+    // then its body's items in the order they will be in.
+    private def keyWithin(stat: Stat, offset: Int): List[(Int, Int)] =
+      settledOrder(stat)
+        .flatMap { case (items, order) =>
+          order.zipWithIndex.collectFirst {
+            case (id, position) if items(id).stats.exists(covers(_, offset)) =>
+              val inside =
+                if (items(id).kept.isDefined) List((0, offset))
+                else settledKey(items(id).stats, offset)
+              (1, position) :: inside
+          }
+        }
+        .getOrElse(List((0, offset)))
+
+    // The order the scope nested in a definition will end up in: its
+    // canonical order, unless the rule can't rewrite it, which leaves it as
+    // written (None).
+    private def settledOrder(stat: Stat): Option[(Vector[Item], List[Int])] =
+      nested(stat).flatMap { scope =>
+        val members = membersOf(scope)
+        val (items, order) = canonicalOrder(scope, members)
+        val canonical = order.flatMap(items(_).stats).map(_.pos.start)
+        val inOrder = canonical == members.map(_.stat.pos.start)
+        if (inOrder || obstacle(items, order).isEmpty) Some((items, order))
+        else None
+      }
+
+    private def membersOf(scope: Scope): List[Member] =
+      scope.stats.flatMap(stat => definedNames(stat).map(Member(stat, _)))
+
+    private def definedNames(stat: Stat): Option[List[Name]] = {
+      val names = stat match {
+        case defn: Defn.Def            => List(defn.name)
+        case defn: Defn.Val            => defn.pats.flatMap(patternNames)
+        case defn: Defn.Var            => defn.pats.flatMap(patternNames)
+        case defn: Defn.Type           => List(defn.name)
+        case defn: Defn.Class          => List(defn.name)
+        case defn: Defn.Trait          => List(defn.name)
+        case defn: Defn.Object         => List(defn.name)
+        case defn: Defn.Enum           => List(defn.name)
+        case defn: Defn.Given          => List(defn.name)
+        case defn: Defn.GivenAlias     => List(defn.name)
+        case defn: Defn.ExtensionGroup => extensionNames(defn)
+        case decl: Decl.Def            => List(decl.name)
+        case decl: Decl.Val            => decl.pats.flatMap(patternNames)
+        case decl: Decl.Type           => List(decl.name)
+        case _                         => Nil
+      }
+      Some(names.filter(_.value.nonEmpty)).filter(_.nonEmpty)
+    }
+
+    private def patternNames(pat: Pat): List[Name] =
+      pat.collect { case Pat.Var(name) => name }
+
+    private def extensionNames(defn: Defn.ExtensionGroup): List[Name] =
+      extensionMembers(defn).flatMap {
+        case member: Defn.Def => List(member.name)
+        case member: Decl.Def => List(member.name)
+        case _                => Nil
+      }
+
+    private def covers(stat: Stat, offset: Int): Boolean =
+      stat.pos.start <= offset && offset < stat.pos.end
 
     private def ownerIn(owners: Map[Symbol, Int], symbol: Symbol): Option[Int] =
       Iterator
@@ -578,64 +656,15 @@ object DefinitionOrder {
     }
 
     // The whole run of definitions, rewritten in the canonical order with one
-    // blank line between them. Only whitespace may separate them: anything
-    // else between two definitions has nowhere to go once they move.
+    // blank line between them, or None, having reported why, if it can't be.
     private def reordered(
         items: Vector[Item],
         order: List[Int]
     ): Option[List[Edit]] = {
-      val pieces = items.indices.toList
-        .flatMap { id =>
-          items(id).kept match {
-            case Some(_) => List(Piece(keptBlockOf(items(id)), Some(id)))
-            case None => items(id).stats.map(stat => Piece(blockOf(stat), None))
-          }
-        }
-        .sortBy(_.block.start)
-      val blocks = pieces.map(_.block)
-      val gaps = blocks.zip(blocks.drop(1)).map { case (before, after) =>
-        Span(before.end, after.start)
-      }
-      val run = Span(blocks.head.start, blocks.last.end)
-      val indent = text.substring(lineStart(run.start), run.start)
-      val anchors = pieces.filter(_.keptItem.isDefined)
-      val blocked = gaps.find { gap =>
-        gap.start > gap.end || text.substring(gap.start, gap.end).trim.nonEmpty
-      }
-      blocked match {
-        case Some(gap) =>
-          report(
-            Position.Range(doc.input, gap.start, gap.end.max(gap.start)),
-            "These definitions are out of order, but something other than " +
-              "whitespace separates two of them, so they can't be moved " +
-              "automatically. A comment moves with the definition directly " +
-              "below it; one separated from it by a blank line doesn't."
-          )
-          None
-        case None if indent.trim.nonEmpty =>
-          report(
-            Position.Range(doc.input, run.start, run.end),
-            "These definitions are out of order, but they don't start on a " +
-              "line of their own, so they can't be moved automatically."
-          )
-          None
-        case None if suppressedWithin(run, anchors.map(_.block)) =>
-          report(
-            Position.Range(doc.input, run.start, run.end),
-            "These definitions are out of order, but one that would move " +
-              "holds a scalafix:off range or a scalafix:ok comment, and " +
-              "scalafix won't edit inside those. Move them by hand."
-          )
-          None
-        case None
-            if anchors.flatMap(_.keptItem) !=
-              order.filter(items(_).kept.nonEmpty) =>
-          report(
-            Position.Range(doc.input, run.start, run.end),
-            "These definitions are out of order, and putting them in order " +
-              "would move one scalafix:off range past another, which the " +
-              "rule leaves in place. Move the ranges by hand."
-          )
+      val Run(pieces, run, indent, anchors) = runOf(items)
+      obstacle(items, order) match {
+        case Some((span, message)) =>
+          report(Position.Range(doc.input, span.start, span.end), message)
           None
         case None =>
           // The kept ranges stay put and cut the run into segments: before
@@ -680,6 +709,73 @@ object DefinitionOrder {
       }
     }
 
+    // Why a scope can't be rewritten into `order`, if it can't, and where.
+    // Only whitespace may separate its definitions: anything else between two
+    // of them has nowhere to go once they move.
+    private def obstacle(
+        items: Vector[Item],
+        order: List[Int]
+    ): Option[(Span, String)] = {
+      val Run(pieces, run, indent, anchors) = runOf(items)
+      val blocks = pieces.map(_.block)
+      val gaps = blocks.zip(blocks.drop(1)).map { case (before, after) =>
+        Span(before.end, after.start)
+      }
+      val blocked = gaps.find { gap =>
+        gap.start > gap.end || text.substring(gap.start, gap.end).trim.nonEmpty
+      }
+      blocked match {
+        case Some(gap) =>
+          Some(
+            Span(gap.start, gap.end.max(gap.start)) ->
+              ("These definitions are out of order, but something other than " +
+                "whitespace separates two of them, so they can't be moved " +
+                "automatically. A comment moves with the definition directly " +
+                "below it; one separated from it by a blank line doesn't.")
+          )
+        case None if indent.trim.nonEmpty =>
+          Some(
+            run -> ("These definitions are out of order, but they don't start " +
+              "on a line of their own, so they can't be moved automatically.")
+          )
+        case None if suppressedWithin(run, anchors.map(_.block)) =>
+          Some(
+            run -> ("These definitions are out of order, but one that would " +
+              "move holds a scalafix:off range or a scalafix:ok comment, and " +
+              "scalafix won't edit inside those. Move them by hand.")
+          )
+        case None
+            if anchors.flatMap(_.keptItem) !=
+              order.filter(items(_).kept.nonEmpty) =>
+          Some(
+            run -> ("These definitions are out of order, and putting them in " +
+              "order would move one scalafix:off range past another, which " +
+              "the rule leaves in place. Move the ranges by hand.")
+          )
+        case None => None
+      }
+    }
+
+    // A scope's definitions, laid out as written, as the pieces a rewrite
+    // moves.
+    private def runOf(items: Vector[Item]): Run = {
+      val pieces = items.indices.toList
+        .flatMap { id =>
+          items(id).kept match {
+            case Some(_) => List(Piece(keptBlockOf(items(id)), Some(id)))
+            case None => items(id).stats.map(stat => Piece(blockOf(stat), None))
+          }
+        }
+        .sortBy(_.block.start)
+      val run = Span(pieces.head.block.start, pieces.last.block.end)
+      Run(
+        pieces = pieces,
+        span = run,
+        indent = text.substring(lineStart(run.start), run.start),
+        anchors = pieces.filter(_.keptItem.isDefined)
+      )
+    }
+
     // A kept item's block runs from its `scalafix:off` comment to the end of
     // its `scalafix:on` one, when those sit directly against it, so that
     // nothing the rule writes lands inside the range.
@@ -702,15 +798,15 @@ object DefinitionOrder {
         line.trim.isEmpty || line.trim.startsWith("//")
       }
 
-    private def report(position: Position, message: String): Unit =
-      problems = Patch.lint(Misplaced(position, message)) :: problems
-
     // Whether a suppressed range overlaps the part of the run the rule would
     // rewrite: all of the run except the anchors.
     private def suppressedWithin(run: Span, anchors: List[Span]): Boolean =
       (keptRanges ++ okLines).exists { range =>
         range.overlaps(run) && !anchors.exists(_.contains(range))
       }
+
+    private def report(position: Position, message: String): Unit =
+      problems = Patch.lint(Misplaced(position, message)) :: problems
 
     // The canonical order cut at each kept item, which stays where it is.
     private def splitAt(
@@ -858,12 +954,6 @@ object DefinitionOrder {
     case _                             => Nil
   }
 
-  private def extensionMembers(defn: Defn.ExtensionGroup): List[Stat] =
-    defn.body match {
-      case block: Term.Block => block.stats
-      case stat              => List(stat)
-    }
-
   // Tarjan's algorithm over both kinds of edge, each pointing from the item
   // that goes above to the one that goes below.
   private def stronglyConnected(
@@ -915,6 +1005,12 @@ object DefinitionOrder {
     }
     from.toVector
   }
+
+  private def extensionMembers(defn: Defn.ExtensionGroup): List[Stat] =
+    defn.body match {
+      case block: Term.Block => block.stats
+      case stat              => List(stat)
+    }
 
   private def pathOf(doc: SemanticDocument): String = {
     val path = doc.input match {

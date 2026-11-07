@@ -59,7 +59,8 @@ extension block. Each scope has exactly one order:
 
 - **A term goes below everything in its scope that uses it**, as soon as all of
   them have been placed. The rule walks depth first from each root, visiting
-  what a definition uses in the order its body first mentions it. Terms are
+  what a definition uses in the order its body first mentions it, reading a
+  class or object body in the order the rule puts it in. Terms are
   `def`s, `val`s, `var`s, `object`s and extension blocks. A helper with several
   callers sits below the last of them.
 - **A type goes immediately above the first definition that names it.** Types

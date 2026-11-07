@@ -22,9 +22,8 @@ when working on the rule itself.
   project that compiles it, so `dogfood` compiles `rules`' sources a second time
   and loads the rule from `rules` (`rules % ScalafixConfig`). After changing the
   rule's sources, `sbt "dogfood/scalafix DefinitionOrder" scalafmtAll` puts them
-  back in order. Run it twice if the second run moves anything: a rewrite
-  inside a class or object can change what the scope around it wants, so one
-  pass doesn't always settle.
+  back in order. One run settles them; if a second run moves anything, that's
+  a bug in the rule (the first bug dogfooding found was exactly that).
 - When the order itself changes, change the README's description of it in the
   same pull request. The header comment in `DefinitionOrder.scala` summarises
   it too.
