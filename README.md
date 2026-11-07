@@ -128,7 +128,8 @@ chapter, are a formatter's job.
 ## Comments
 
 A comment moves with the definition directly below it, as long as no blank line
-separates them. So does a trailing comment on the definition's last line. A
+separates them. So does a trailing comment on the definition's last line, and
+a Scala 3 `end` marker closing the definition, with any comment trailing that. A
 comment that covers several definitions moves with the first of them only, so
 word it to stand on its own.
 

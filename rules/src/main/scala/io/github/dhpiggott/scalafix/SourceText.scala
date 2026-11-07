@@ -148,16 +148,29 @@ private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
     Span(start, end)
   }
 
-  // A definition together with the comments directly above it, and one
-  // trailing it on its last line.
+  // A definition together with the comments directly above it, the `end`
+  // marker closing it, and a comment trailing it on its last line.
   def blockOf(stat: Stat): Span = {
-    val lineEnd = text.indexOf('\n', stat.pos.end) match {
+    val last = endMarkerEnd(stat).getOrElse(stat.pos.end)
+    val lineEnd = text.indexOf('\n', last) match {
       case -1  => text.length
       case end => end
     }
-    val trailing = text.substring(stat.pos.end, lineEnd).trim
-    val end = if (trailing.startsWith("//")) lineEnd else stat.pos.end
+    val trailing = text.substring(last, lineEnd).trim
+    val end = if (trailing.startsWith("//")) lineEnd else last
     Span(leadingStart(stat.pos.start), end)
+  }
+
+  // Scala 3 lets a definition close with `end <name>`, which scalameta parses
+  // as a statement of its own, after the definition rather than in it. It
+  // belongs to the definition all the same: left behind, it would close
+  // whatever moved in above it, which doesn't compile.
+  private def endMarkerEnd(stat: Stat): Option[Int] = {
+    val marker = EndMarker.pattern.matcher(text)
+    marker.region(stat.pos.end, text.length)
+    if (marker.lookingAt() && endMarkerNames(stat)(marker.group(1)))
+      Some(marker.end)
+    else None
   }
 
   // Walks up from a definition's first line over the comments directly
@@ -272,6 +285,9 @@ private[scalafix] object SourceText {
       indent: String,
       anchors: List[Piece]
   )
+
+  // `end`, on a line of its own after the definition, and the name it gives.
+  private val EndMarker = """\s*\n[ \t]*end[ \t]+`?([^`\s;]+)`?""".r
 
   private final case class Marker(isOff: Boolean, comment: Token.Comment)
 }
