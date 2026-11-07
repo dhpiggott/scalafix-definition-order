@@ -12,7 +12,9 @@ when working on the rule itself.
   `sbt scalafmtCheckAll scalafmtSbtCheck tests/test "dogfood/scalafix --check DefinitionOrder"`
   on Linux, so a cloud session can run it too. Maven Central sometimes answers a
   cold dependency download there with HTTP 429; retrying after a pause gets
-  through, because what did download stays cached.
+  through, because what did download stays cached. The workflows all take
+  their JDK from `.java-version`. It only affects the build: scalac emits Java
+  8 bytecode either way, so the published rule loads on any JDK from 8 up.
 - Every behaviour change comes with a fixture: an input headed
   `rule = DefinitionOrder`, plus an output of the same name unless the rule must
   leave the input unchanged, in which case its `// assert: DefinitionOrder`
