@@ -79,3 +79,19 @@ lazy val tests = project
     scalafixTestkitInputScalaVersion :=
       (input / Compile / scalaVersion).value
   )
+
+// The rule's own sources, compiled a second time with SemanticDB so the rule
+// can be run over them. Scalafix can't load a rule into the project that
+// compiles it, but it can load one from another project in the build, which
+// is what `rules % ScalafixConfig` does. So this project borrows `rules`'
+// sources rather than having any of its own, and `dogfood/scalafix` checks
+// them with the rule as it stands in the checkout.
+lazy val dogfood = project
+  .dependsOn(rules % ScalafixConfig)
+  .settings(
+    publish / skip := true,
+    semanticdbEnabled := true,
+    libraryDependencies += "ch.epfl.scala" %% "scalafix-core" % scalafixVersion,
+    Compile / unmanagedSourceDirectories :=
+      (rules / Compile / unmanagedSourceDirectories).value
+  )

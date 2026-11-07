@@ -42,5 +42,9 @@ jobs:
       - name: Set up sbt
         uses: sbt/setup-sbt@v1
 
-      - name: Check formatting and run the tests
-        run: sbt --batch --no-colors scalafmtCheckAll scalafmtSbtCheck tests/test
+      # The last check runs the rule, as built from this checkout, over its own
+      # sources (see `dogfood` in build.sbt).
+      - name: Check formatting, run the tests and check the rule's own order
+        run: >-
+          sbt --batch --no-colors scalafmtCheckAll scalafmtSbtCheck tests/test
+          "dogfood/scalafix --check DefinitionOrder"

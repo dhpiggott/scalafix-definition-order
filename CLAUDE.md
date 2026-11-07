@@ -8,18 +8,23 @@ when working on the rule itself.
 
 - `rules/` is the rule, compiled for Scala 2.13 because that is what scalafix
   loads rules on. `input/` and `output/` are the testkit fixtures (Scala 3), and
-  `tests/` runs them. `sbt scalafmtCheckAll scalafmtSbtCheck tests/test` is what
-  CI runs, and it runs on Linux, so a cloud session can run it too. Maven Central
-  sometimes answers a cold dependency download there with HTTP 429; retrying
-  after a pause gets through, because what did download stays cached.
+  `tests/` runs them. CI runs
+  `sbt scalafmtCheckAll scalafmtSbtCheck tests/test "dogfood/scalafix --check DefinitionOrder"`
+  on Linux, so a cloud session can run it too. Maven Central sometimes answers a
+  cold dependency download there with HTTP 429; retrying after a pause gets
+  through, because what did download stays cached.
 - Every behaviour change comes with a fixture: an input headed
   `rule = DefinitionOrder`, plus an output of the same name unless the rule must
   leave the input unchanged, in which case its `// assert: DefinitionOrder`
   comments name the diagnostics it reports. The fixtures are excluded from
   scalafmt, because formatting one would change what it tests.
-- The rule is not run on its own sources yet. Scalafix can't load a rule into
-  the build that compiles it, so this has to wait for a release the build can
-  take through `scalafixDependencies`.
+- The rule is run on its own sources. Scalafix can't load a rule into the
+  project that compiles it, so `dogfood` compiles `rules`' sources a second time
+  and loads the rule from `rules` (`rules % ScalafixConfig`). After changing the
+  rule's sources, `sbt "dogfood/scalafix DefinitionOrder" scalafmtAll` puts them
+  back in order. Run it twice if the second run moves anything: a rewrite
+  inside a class or object can change what the scope around it wants, so one
+  pass doesn't always settle.
 - When the order itself changes, change the README's description of it in the
   same pull request. The header comment in `DefinitionOrder.scala` summarises
   it too.

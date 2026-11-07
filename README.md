@@ -49,8 +49,8 @@ rules = [DefinitionOrder]
 
 Then `sbt scalafixAll` rewrites your sources, and `sbt "scalafixAll --check"`
 fails the build on anything out of place. The tests are Scala 3 sources,
-including the fewer-braces syntax. Scala 2.13 sources should work, but nothing
-tests them yet.
+including the fewer-braces syntax. The rule's own sources are Scala 2.13, and
+CI checks them with the rule, but no test covers Scala 2.13 on its own.
 
 ## The order
 
