@@ -259,7 +259,7 @@ object DefinitionOrder {
         case _: Defn.Class | _: Defn.Trait | _: Defn.Enum => true
         case _                                            => false
       }
-      Some(Scope(stats, fieldsFirst)).filter(_.stats.nonEmpty)
+      Some(Scope(stats, fieldsFirst = fieldsFirst)).filter(_.stats.nonEmpty)
     }
 
     // The whole run of definitions, rewritten in the canonical order with one
