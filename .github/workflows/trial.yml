@@ -31,12 +31,12 @@ jobs:
       # Each project covers something the others don't:
       # - sbt/sbt-ci-release: an sbt 1 plugin, so Scala 2.12.
       # - scala/scala3-example-project: a Scala 3 sample.
-      # - scalameta/munit: macro-heavy code, with suites built from test registrations,
-      #   where the rule's view of uses is weakest and its diagnostics are
-      #   most common.
+      # - scalameta/munit: macro-heavy code, with suites built from test
+      #   registrations, where the rule's view of uses is weakest and its
+      #   diagnostics are most common.
       # - scopt/scopt: a library cross-built with sbt 2.
-      # - softwaremill/ox: idiomatic modern Scala 3, with fewer braces, givens, extensions,
-      #   enums, opaque types and end markers.
+      # - softwaremill/ox: idiomatic modern Scala 3, with fewer braces,
+      #   givens, extensions, enums, opaque types and end markers.
       # - typelevel/log4cats: a Typelevel library on Scala 2.13 and 3.
       #
       # Left out on purpose:
