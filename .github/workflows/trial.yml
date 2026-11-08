@@ -28,13 +28,16 @@ jobs:
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      # Each project covers something the others don't: a Scala 3 sample; a
-      # library cross-built with sbt 2 (scopt); an sbt 1 plugin, so Scala
-      # 2.12 (sbt-ci-release); a Typelevel library on 2.13 and 3 (log4cats);
-      # idiomatic modern Scala 3, with fewer braces, givens, extensions,
-      # enums and opaque types (ox); and macro-heavy code with suites built
-      # from test registrations, where the rule's view of uses is weakest
-      # and its diagnostics are most common (munit).
+      # Each project covers something the others don't:
+      # - sbt-ci-release: an sbt 1 plugin, so Scala 2.12.
+      # - scala3-example-project: a Scala 3 sample.
+      # - munit: macro-heavy code, with suites built from test registrations,
+      #   where the rule's view of uses is weakest and its diagnostics are
+      #   most common.
+      # - scopt: a library cross-built with sbt 2.
+      # - ox: idiomatic modern Scala 3, with fewer braces, givens, extensions,
+      #   enums, opaque types and end markers.
+      # - log4cats: a Typelevel library on Scala 2.13 and 3.
       #
       # Left out on purpose:
       # - Plutus, the project the rule was written for, would be the best
@@ -43,12 +46,12 @@ jobs:
       #   workflow, and either would add tens of minutes to it.
       matrix:
         repo:
-          - scala/scala3-example-project
-          - scopt/scopt
           - sbt/sbt-ci-release
-          - typelevel/log4cats
-          - softwaremill/ox
+          - scala/scala3-example-project
           - scalameta/munit
+          - scopt/scopt
+          - softwaremill/ox
+          - typelevel/log4cats
     steps:
       # A shallow clone is fine here: trial.sh sets the rule's version
       # itself, so nothing reads the tag history.
