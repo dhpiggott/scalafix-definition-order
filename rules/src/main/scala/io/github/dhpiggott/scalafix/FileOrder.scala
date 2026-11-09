@@ -40,6 +40,8 @@ private[scalafix] final class FileOrder(implicit doc: SemanticDocument) {
   private def editsFor(scope: Scope): List[Edit] = {
     val members = membersOf(scope)
     val Ordered(items, order) = canonicalOrder(scope, members)
+    // A kept range is one item however many definitions it holds, so it is
+    // reported once, at its first definition, rather than once for each.
     items.filter(_.kept.isDefined).foreach { item =>
       problems = Patch.lint(KeptAsWritten(item.stats.head.pos)) :: problems
     }
