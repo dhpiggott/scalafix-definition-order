@@ -64,7 +64,7 @@ class DefinitionOrder(config: DefinitionOrderConfig)
 }
 
 object DefinitionOrder {
-  private def pathOf(doc: SemanticDocument): String = {
+  private[scalafix] def pathOf(doc: SemanticDocument): String = {
     val path = doc.input match {
       case Input.File(file, _)        => file.toString
       case Input.VirtualFile(file, _) => file

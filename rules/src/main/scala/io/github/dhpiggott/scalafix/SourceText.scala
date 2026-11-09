@@ -1,6 +1,7 @@
 package io.github.dhpiggott.scalafix
 
 import scala.annotation.tailrec
+import scala.meta.Position
 import scala.meta.Stat
 import scala.meta.Token
 
@@ -174,28 +175,42 @@ private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
   }
 
   // Walks up from a definition's first line over the comments directly
-  // above it: `//` lines, and `/* */` blocks that start a line of their own.
-  // A blank line or code stops it.
+  // above it, each starting a line of its own: `//` lines, and `/* */`
+  // blocks. It goes by tokens rather than text, because a block comment is
+  // one token however many lines it spans, nested comments included, and a
+  // `/*` found by searching the text could be one nested inside another. A
+  // blank line or code stops it.
   @tailrec private def leadingStart(start: Int): Int = {
     val currentLine = lineStart(start)
     if (currentLine == 0 || text.substring(currentLine, start).trim.nonEmpty)
       start
     else {
-      val previousEnd = currentLine - 1
-      val previousStart = lineStart(previousEnd)
-      val previous = text.substring(previousStart, previousEnd).trim
-      val open = text.lastIndexOf("/*", previousEnd)
-      val opensLine =
-        open >= 0 && text.substring(lineStart(open), open).trim.isEmpty
-      if (previous.startsWith("//"))
-        leadingStart(text.indexOf("//", previousStart))
-      else if (previous.endsWith("*/") && opensLine) leadingStart(open)
-      else start
+      // The token holding the line break above. One holding two is a blank
+      // line.
+      val lineBreak = firstTokenFrom(currentLine) - 1
+      val above =
+        if (tokens(lineBreak).text.count(_ == '\n') > 1) None
+        else
+          (lineBreak - 1 to 0 by -1).iterator
+            .map(tokens)
+            .find(token => !isHorizontalSpace(token))
+      above match {
+        case Some(comment: Token.Comment)
+            if text
+              .substring(lineStart(comment.start), comment.start)
+              .trim
+              .isEmpty =>
+          leadingStart(comment.start)
+        case _ => start
+      }
     }
   }
 
   private def lineStart(offset: Int): Int =
     text.lastIndexOf('\n', offset - 1) + 1
+
+  private def isHorizontalSpace(token: Token): Boolean =
+    token.isInstanceOf[Token.Whitespace] && !token.text.contains('\n')
 
   private def onlyComments(from: Int, to: Int): Boolean =
     text.substring(from, to).split('\n').forall { line =>
@@ -210,20 +225,32 @@ private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
     }
 
   // Scalafix patches whole tokens, so a replacement becomes the first token
-  // it covers replaced with the new text and the rest removed. That only
-  // works if the edit starts exactly on a token; None means it doesn't. An
-  // edit covering nothing is an insertion.
-  def toPatch(edit: Edit): Option[Patch] =
-    if (edit.start == edit.end) insertAt(edit.start, edit.text)
-    else {
-      val inside = tokens
-        .drop(firstTokenFrom(edit.start))
-        .takeWhile(_.end <= edit.end)
-        .toList
-      inside.headOption.filter(_.start == edit.start).map { first =>
-        Patch.removeTokens(inside.tail) + Patch.replaceToken(first, edit.text)
+  // it covers replaced with the new text and the rest removed, and an edit
+  // covering nothing is an insertion beside whitespace. Every edit starts
+  // where a definition's block does, or at a kept range's edge, and those
+  // are always token boundaries; one that isn't is a bug in the rule, so it
+  // fails the run rather than leaving the scope as it is.
+  def toPatch(edit: Edit): Patch = {
+    val patch =
+      if (edit.start == edit.end) insertAt(edit.start, edit.text)
+      else {
+        val inside = tokens
+          .drop(firstTokenFrom(edit.start))
+          .takeWhile(_.end <= edit.end)
+          .toList
+        inside.headOption.filter(_.start == edit.start).map { first =>
+          Patch.removeTokens(inside.tail) + Patch.replaceToken(first, edit.text)
+        }
       }
+    patch.getOrElse {
+      val position = Position.Range(doc.input, edit.start, edit.end)
+      throw new IllegalStateException(
+        s"DefinitionOrder: ${DefinitionOrder.pathOf(doc)}:${position.startLine + 1}: " +
+          "an edit doesn't start on a token boundary, so it can't be " +
+          "written as a patch. This is a bug in the rule; please report it."
+      )
     }
+  }
 
   // Beside whitespace rather than on the definition there, which may be
   // the first token of a kept range.

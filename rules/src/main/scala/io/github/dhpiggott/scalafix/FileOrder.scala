@@ -22,18 +22,7 @@ private[scalafix] final class FileOrder(implicit doc: SemanticDocument) {
   // others, so if scalafix would drop any part of one, it drops them all.
   def patch: Patch = {
     val edits = scopes(doc.tree).flatMap(editsFor)
-    val patches = edits.map(edit => (edit, source.toPatch(edit)))
-    val unplaceable = patches.collect { case (edit, None) => edit }
-    unplaceable.foreach { edit =>
-      report(
-        Position.Range(doc.input, edit.start, edit.end),
-        "These definitions are out of order, but there is nowhere beside " +
-          "this point to write them, so they can't be moved automatically."
-      )
-    }
-    val moves =
-      if (unplaceable.nonEmpty) Patch.empty
-      else patches.flatMap { case (_, patch) => patch }.asPatch.atomic
+    val moves = edits.map(source.toPatch).asPatch.atomic
     (moves :: problems).asPatch
   }
 
