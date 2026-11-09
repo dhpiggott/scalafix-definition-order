@@ -16,10 +16,14 @@ private[scalafix] object Synthetics {
   // into `describe(1)(using defaultShow)`, but nothing in `render`'s source
   // names it. SemanticDB records each such insertion as a synthetic: a tree
   // of what was inserted (`defaultShow`), with the code it was attached to
-  // (`describe(1)`) inside it. Each symbol inserted counts as mentioned
-  // where that code starts, so whichever definition holds the code
-  // (`render`) is its user, and `defaultShow` goes below `render`. Without
-  // this, a given used only implicitly would have no users at all. If a
+  // (`describe(1)`) inside it. Uses are found by position: a name written
+  // in the source is used by whichever definition's text contains it, at
+  // the point it's written. An inserted symbol has no position of its own,
+  // so it takes the position where the code it was attached to starts, as
+  // if `defaultShow` were written at the start of `describe(1)`. That puts
+  // the use inside `render`, so `defaultShow` goes below `render`, and
+  // among `render`'s uses it comes where `describe(1)` does. Without this,
+  // a given used only implicitly would have no users at all. If a
   // synthetic holds more than one piece of original code, the first is
   // used: `originsOf` looks in an application's function before its
   // arguments.
