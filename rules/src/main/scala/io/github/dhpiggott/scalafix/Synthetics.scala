@@ -28,8 +28,9 @@ private[scalafix] object Synthetics {
   // `for (x <- xs; y <- ys) yield (x, y)` as `xs.flatMap(x => ys.map(...))`,
   // with `xs`, `ys` and `(x, y)` as originals. They all lie in one
   // definition, so which is used decides only where the use ranks among
-  // that definition's others. The first as written is used: `originsOf`
-  // looks in an application's function before its arguments.
+  // that definition's others. The first is used. `originsOf` lists them
+  // in the order they're written, because a call's function (`xs.flatMap`)
+  // is written before its arguments, and it looks in that order.
   def inferredUses(doc: SemanticDocument): List[Occurrence] =
     doc.synthetics.toList.flatMap { synthetic =>
       originsOf(synthetic).headOption.toList.flatMap { origin =>
