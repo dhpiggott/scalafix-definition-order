@@ -68,7 +68,7 @@ private[scalafix] final class FileOrder(implicit doc: SemanticDocument) {
         val keptEdges = anchors.flatMap { anchor =>
           List(anchor.block.start, anchor.block.end)
         }
-        val bounds = (run.start :: keptEdges) :+ run.end
+        val bounds = run.start :: (keptEdges :+ run.end)
         val segments = bounds.grouped(2).toList.collect { case List(from, to) =>
           Span(from, to)
         }
