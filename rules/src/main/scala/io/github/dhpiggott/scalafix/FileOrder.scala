@@ -56,9 +56,14 @@ private[scalafix] final class FileOrder(implicit doc: SemanticDocument) {
         report(Position.Range(doc.input, span.start, span.end), message)
         None
       case None =>
-        // The kept ranges stay put and cut the run into segments: before
-        // the first, between each pair, and after the last. The canonical
-        // order is cut at the same kept items, so segment n gets group n.
+        // A kept range never moves, so the rest of the run is rewritten
+        // around it. The kept ranges split the run's text into segments
+        // (before the first, between each pair, after the last), and split
+        // the canonical order into groups the same way. Both splits are at
+        // the same kept items, so each segment has a group, and segment n is
+        // rewritten with group n's definitions. Written a, K, b, c with the
+        // order b, K, c, a, the segments hold [a] and [b, c], the groups are
+        // [b] and [c, a], and the result is b, K, c, a.
         val separator = "\n\n" + indent
         val bounds = run.start :: anchors.flatMap { anchor =>
           List(anchor.block.start, anchor.block.end)
