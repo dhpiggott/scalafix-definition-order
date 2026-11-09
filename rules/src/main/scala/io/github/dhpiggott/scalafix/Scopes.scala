@@ -24,6 +24,10 @@ private[scalafix] object Scopes {
     definedNames(stat).toList.flatten.map(_.value).toSet ++ keyword
   }
 
+  // A statement in a scope that defines something, with the names it
+  // defines: one for most, several for a pattern `val (a, b) = ...` or an
+  // extension block. A statement that defines nothing, such as an import or
+  // an expression, isn't a member. Members are grouped into items.
   final case class Member(stat: Stat, names: List[Name])
 
   // Offsets into the file, end exclusive.
