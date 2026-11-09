@@ -65,9 +65,10 @@ private[scalafix] final class FileOrder(implicit doc: SemanticDocument) {
         // order b, K, c, a, the segments hold [a] and [b, c], the groups are
         // [b] and [c, a], and the result is b, K, c, a.
         val separator = "\n\n" + indent
-        val bounds = run.start :: anchors.flatMap { anchor =>
+        val keptEdges = anchors.flatMap { anchor =>
           List(anchor.block.start, anchor.block.end)
-        } ++ List(run.end)
+        }
+        val bounds = (run.start :: keptEdges) :+ run.end
         val segments = bounds.grouped(2).toList.collect { case List(from, to) =>
           Span(from, to)
         }
