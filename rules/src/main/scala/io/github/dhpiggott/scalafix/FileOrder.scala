@@ -87,7 +87,10 @@ private[scalafix] final class FileOrder(implicit doc: SemanticDocument) {
                 block.start
             }
             // A segment already in order keeps its text, and only what
-            // changes inside its definitions is edited.
+            // changes inside its definitions is edited. It's in order when
+            // the definitions written in it, top to bottom, are its group's,
+            // in the group's order: both lists are of block starts, which
+            // tell definitions apart, and `pieces` is sorted by them.
             if (written == stats.map(source.blockOf(_).start))
               stats.flatMap(editsWithin)
             else {
