@@ -119,13 +119,10 @@ private[scalafix] final class FileOrder(implicit doc: SemanticDocument) {
       order: List[ItemId],
       items: Vector[Item]
   ): List[List[ItemId]] =
-    order
-      .foldLeft(List(List.empty[ItemId])) { (groups, id) =>
-        if (items(id).kept.isDefined) Nil :: groups
-        else (id :: groups.head) :: groups.tail
-      }
-      .map(_.reverse)
-      .reverse
+    order.foldRight(List(List.empty[ItemId])) { (id, groups) =>
+      if (items(id).kept.isDefined) Nil :: groups
+      else (id :: groups.head) :: groups.tail
+    }
 
   // A definition's block as it will read once the scopes nested in it are
   // rewritten too.
