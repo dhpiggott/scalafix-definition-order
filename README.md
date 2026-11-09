@@ -171,6 +171,19 @@ of the scope is arranged around them. Scalafix drops any patch inside such a
 range, so the rule only ever edits either side of it. Add a comment saying why,
 since the rule can't.
 
+Being one item means the range is placed as a whole. Anything that uses any of
+its definitions counts as using the range, so the range goes below all of
+them. Anything any of its definitions uses goes below the range, even if only
+one of them uses it. So if one definition in a range would belong near the top
+of the scope and another near the bottom, the range keeps them together and
+lands where the whole group fits, which may suit neither. Keep a range to a
+small run that belongs together, and use two ranges for definitions that don't.
+
+Where the range sits in the file doesn't change, so the other definitions move
+around it instead. Whatever comes before the range in the order fills the space
+above it, and the rest fills the space below, so how many definitions sit on
+each side can change from how they were written.
+
 ## Configuration
 
 ```hocon
