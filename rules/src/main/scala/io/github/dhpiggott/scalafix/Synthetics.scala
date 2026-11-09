@@ -40,7 +40,10 @@ private[scalafix] object Synthetics {
 
   // Where in the source a synthetic was inserted: the start of the
   // `OriginalTree` or `OriginalSubTree` inside it, which stands for the code
-  // as written. The other cases only look further in.
+  // as written. The other cases only look further in, apart from the leaves,
+  // which hold no code as written: an inserted symbol or literal, or
+  // `NoTree`, which SemanticDB leaves where it records no tree. Every case is
+  // named, so a new kind of tree is a compile error here, not a silent miss.
   private def originsOf(tree: SemanticTree): List[Int] = tree match {
     case OriginalTree(original)        => List(original.pos.start)
     case OriginalSubTree(original)     => List(original.pos.start)
@@ -49,7 +52,7 @@ private[scalafix] object Synthetics {
     case TypeApplyTree(function, _)    => originsOf(function)
     case FunctionTree(_, body)         => originsOf(body)
     case MacroExpansionTree(before, _) => originsOf(before)
-    case _                             => Nil
+    case _: IdTree | _: LiteralTree | NoTree => Nil
   }
 
   // The symbols of the inserted code: every `IdTree` in a synthetic. The
@@ -62,6 +65,6 @@ private[scalafix] object Synthetics {
     case TypeApplyTree(function, _)    => symbolsIn(function)
     case FunctionTree(_, body)         => symbolsIn(body)
     case MacroExpansionTree(before, _) => symbolsIn(before)
-    case _                             => Nil
+    case _: OriginalTree | _: OriginalSubTree | _: LiteralTree | NoTree => Nil
   }
 }
