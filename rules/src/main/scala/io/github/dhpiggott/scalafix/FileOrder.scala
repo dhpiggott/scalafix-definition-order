@@ -76,6 +76,10 @@ private[scalafix] final class FileOrder(implicit doc: SemanticDocument) {
         val last = segments.size - 1
         Some(segments.zip(groups).zipWithIndex.flatMap {
           case ((segment, stats), index) =>
+            // Where this segment's definitions start, as written. The
+            // segments are cut at the kept pieces' edges, so every other
+            // piece lies wholly inside one segment, and one that doesn't
+            // start in this one is collected for the segment it's in.
             val written = pieces.collect {
               case Piece(block, None)
                   if segment.start <= block.start &&
