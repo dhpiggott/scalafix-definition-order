@@ -43,8 +43,9 @@ private[scalafix] final class FileOrder(implicit doc: SemanticDocument) {
   private def editsWithin(stat: Stat): List[Edit] =
     nested(stat).toList.flatMap(editsFor)
 
-  // The whole run of definitions, rewritten in the canonical order with one
-  // blank line between them, or None, having reported why, if it can't be.
+  // The edits that rewrite the whole run of definitions in the canonical
+  // order, with one blank line between them; or None, having reported why,
+  // if the run can't be rewritten.
   private def reordered(
       items: Vector[Item],
       order: List[ItemId]
