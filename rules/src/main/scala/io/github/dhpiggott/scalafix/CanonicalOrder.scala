@@ -121,6 +121,10 @@ private[scalafix] final class CanonicalOrder(source: SourceText)(implicit
             else List(name.symbol)
           }
         }
+        // An item is sorted as one, so its key comes from one stat: the
+        // class over its companion, or a kept range's first definition.
+        // Whatever applies to any part applies to the whole item: being a
+        // type, being strict, and the symbols a use can name.
         val lead = stats.head
         Item(
           stats = stats,
