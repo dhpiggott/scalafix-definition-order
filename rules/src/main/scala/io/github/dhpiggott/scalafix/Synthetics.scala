@@ -24,12 +24,12 @@ private[scalafix] object Synthetics {
   // the use inside `render`, so `defaultShow` goes below `render`, and
   // among `render`'s uses it comes where `describe(1)` does. Without this,
   // a given used only implicitly would have no users at all. A synthetic
-  // can wrap several pieces of written code, as Scala 2 does for a
-  // `for` comprehension, which it records as calls to `flatMap` and `map`
-  // around the generators and the body. They all lie in one expression,
-  // so in one definition; the first is used, which `originsOf` finds by
-  // looking in an application's function before its arguments, as they
-  // are written.
+  // can wrap several pieces of written code: Scala 2 records
+  // `for (x <- xs; y <- ys) yield (x, y)` as `xs.flatMap(x => ys.map(...))`,
+  // with `xs`, `ys` and `(x, y)` as originals. They all lie in one
+  // definition, so which is used decides only where the use ranks among
+  // that definition's others. The first as written is used: `originsOf`
+  // looks in an application's function before its arguments.
   def inferredUses(doc: SemanticDocument): List[Occurrence] =
     doc.synthetics.toList.flatMap { synthetic =>
       originsOf(synthetic).headOption.toList.flatMap { origin =>
