@@ -21,12 +21,17 @@ private[scalafix] object Scopes {
       case _: Defn.Var                        => Some("var")
       case _                                  => None
     }
-    definedNames(stat).toList.flatten.map(_.value).toSet ++ keyword
+    definedNames(stat).map(_.value).toSet ++ keyword
   }
 
   // An abstract member: a `def`, `val`, `var`, `type` or `given` with no
-  // body.
-  def isDeclaration(stat: Stat): Boolean = stat.isInstanceOf[Decl]
+  // body, or an extension block whose methods all have none.
+  def isDeclaration(stat: Stat): Boolean = stat match {
+    case _: Decl                   => true
+    case defn: Defn.ExtensionGroup =>
+      extensionMembers(defn).forall(isDeclaration)
+    case _ => false
+  }
 
   // A statement in a scope that defines something, with the names it
   // defines: one for most, several for a pattern `val (a, b) = ...` or an
@@ -111,11 +116,21 @@ private[scalafix] object Scopes {
   final case class Scope(stats: List[Stat], classBody: Boolean)
 
   def membersOf(scope: Scope): List[Member] =
-    scope.stats.flatMap(stat => definedNames(stat).map(Member(stat, _)))
+    scope.stats.flatMap { stat =>
+      val names = definedNames(stat)
+      if (names.isEmpty) None else Some(Member(stat, names))
+    }
 
-  private def definedNames(stat: Stat): Option[List[Name]] = {
+  // The names a statement defines, or none if it isn't a definition. `Stat`
+  // also covers imports, expressions and enum cases, so the match can't be
+  // exhaustive. A `val` or `var` has patterns (`pats`) on its left rather
+  // than a name: `val a, b = 0` has two, and `val (x, y) = pair` one, which
+  // binds two names. An anonymous given's name is empty; nothing can refer
+  // to it, so it defines nothing here.
+  private def definedNames(stat: Stat): List[Name] = {
     val names = stat match {
       case defn: Defn.Def            => List(defn.name)
+      case defn: Defn.Macro          => List(defn.name)
       case defn: Defn.Val            => defn.pats.flatMap(patternNames)
       case defn: Defn.Var            => defn.pats.flatMap(patternNames)
       case defn: Defn.Type           => List(defn.name)
@@ -128,15 +143,20 @@ private[scalafix] object Scopes {
       case defn: Defn.ExtensionGroup => extensionNames(defn)
       case decl: Decl.Def            => List(decl.name)
       case decl: Decl.Val            => decl.pats.flatMap(patternNames)
+      case decl: Decl.Var            => decl.pats.flatMap(patternNames)
       case decl: Decl.Type           => List(decl.name)
+      case decl: Decl.Given          => List(decl.name)
       case _                         => Nil
     }
-    Some(names.filter(_.value.nonEmpty)).filter(_.nonEmpty)
+    names.filter(_.value.nonEmpty)
   }
 
+  // `Pat.Var` is the only pattern that binds a name; `collect` finds it
+  // inside the others, such as a tuple, `x @ ...` or `x: T`.
   private def patternNames(pat: Pat): List[Name] =
     pat.collect { case Pat.Var(name) => name }
 
+  // An extension's methods can be abstract, in a trait.
   private def extensionNames(defn: Defn.ExtensionGroup): List[Name] =
     extensionMembers(defn).flatMap {
       case member: Defn.Def => List(member.name)
