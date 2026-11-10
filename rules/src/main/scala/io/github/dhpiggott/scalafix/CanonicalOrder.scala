@@ -42,11 +42,20 @@ private[scalafix] final class CanonicalOrder(source: SourceText)(implicit
     val mentions =
       items.indices.toVector.map(mentionsBy(_, items, owners))
     val executed = mentions.map(_.executed)
-    val isField = items.map(item => scope.fieldsFirst && item.isStrict)
-    // Fields come first whatever uses them, so a field used by something
-    // other than a field isn't placed below that user.
+    // The walk runs in phases, each placing all of its items before the next
+    // starts. A class, trait or enum body has three: its declarations, its
+    // fields, then the rest, which is how its declarations and fields come
+    // first. Any other scope has one.
+    val phaseOf = items.map { item =>
+      if (!scope.classBody) 0
+      else if (item.isDeclaration) 0
+      else if (item.isStrict) 1
+      else 2
+    }
+    // An item in an earlier phase comes first whatever uses it, so it isn't
+    // placed below a user in a later one.
     val uses = items.indices.toVector.map { user =>
-      mentions(user).used.filterNot(used => isField(used) && !isField(user))
+      mentions(user).used.filterNot(used => phaseOf(used) < phaseOf(user))
     }
     // A type's subtypes in the scope, which go below it even where it names
     // them, as a sealed type's body often does: a hierarchy reads from the
@@ -76,15 +85,9 @@ private[scalafix] final class CanonicalOrder(source: SourceText)(implicit
     val waits = Walk.reverse(children).map(_.toSet)
     val component = Walk.stronglyConnected(items.size, pulls, children)
     val walk = new Walk(items, pulls, children, waits, component)
-    // The walk runs in phases, each placing all of its items before the next
-    // starts. A class, trait or enum body has two, its fields and then the
-    // rest, which is how its fields come first; any other scope has one.
-    val phases =
-      if (!scope.fieldsFirst) List(items.indices)
-      else {
-        val (fields, others) = items.indices.partition(isField)
-        List(fields, others)
-      }
+    val phases = phaseOf.distinct.sorted.map { phase =>
+      items.indices.filter(phaseOf(_) == phase)
+    }
     // The walk starts from every root (ready, and not waiting to be pulled
     // above something) in key order, then places whatever it didn't reach.
     phases.foreach { phase =>
@@ -138,6 +141,7 @@ private[scalafix] final class CanonicalOrder(source: SourceText)(implicit
             source = source.text.substring(lead.pos.start, lead.pos.end)
           ),
           isType = stats.exists(isType),
+          isDeclaration = stats.forall(isDeclaration),
           isStrict = stats.exists(isStrict),
           symbols = symbols.toSet
         )

@@ -90,8 +90,10 @@ extension block. Each scope has exactly one order:
   private, qualified or not, and overloads that share a name are ordered by
   their source text, so the result never depends on the order they were written
   in.
-- **A class, trait or enum body puts its fields (strict `val`s and `var`s)
-  first**, then everything else. Each part is ordered as above.
+- **A class, trait or enum body puts its declarations first, then its fields**
+  (strict `val`s and `var`s), then everything else. A declaration is an
+  abstract member, a `def`, `val`, `var`, `type` or `given` with no body, so a
+  trait reads as its contract first. Each part is ordered as above.
 
 ## How this relates to *Clean Code*
 
@@ -108,7 +110,8 @@ What it takes from the chapter:
 - **Dependent functions.** The chapter says "the caller should be above the
   callee, if at all possible". This rule makes that mandatory.
 - **Instance variables at the top of the class.** This is the "fields first"
-  rule.
+  rule. Declarations go above them: they use nothing, and they are what the
+  rest of the class, and every subclass, is written against.
 - **Team rules.** There is exactly one order, so there is nothing to agree on
   or argue about in review.
 

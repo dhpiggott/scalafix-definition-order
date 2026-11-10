@@ -24,6 +24,10 @@ private[scalafix] object Scopes {
     definedNames(stat).toList.flatten.map(_.value).toSet ++ keyword
   }
 
+  // An abstract member: a `def`, `val`, `var`, `type` or `given` with no
+  // body.
+  def isDeclaration(stat: Stat): Boolean = stat.isInstanceOf[Decl]
+
   // A statement in a scope that defines something, with the names it
   // defines: one for most, several for a pattern `val (a, b) = ...` or an
   // extension block. A statement that defines nothing, such as an import or
@@ -54,6 +58,7 @@ private[scalafix] object Scopes {
       kept: Option[Span],
       key: SortKey,
       isType: Boolean,
+      isDeclaration: Boolean,
       isStrict: Boolean,
       symbols: Set[Symbol]
   )
@@ -99,10 +104,11 @@ private[scalafix] object Scopes {
     case _                           => isClassLike(stat)
   }
 
-  // Only a class, trait or enum body is `fieldsFirst`: its fields are each
-  // instance's state. The strict vals of an object, an extension block or a
-  // file's top level are constants, placed by their uses like a `def`.
-  final case class Scope(stats: List[Stat], fieldsFirst: Boolean)
+  // Only a class, trait or enum body is a `classBody`, which puts its
+  // declarations and fields first: they are its contract and each instance's
+  // state. The strict vals of an object, an extension block or a file's top
+  // level are constants, placed by their uses like a `def`.
+  final case class Scope(stats: List[Stat], classBody: Boolean)
 
   def membersOf(scope: Scope): List[Member] =
     scope.stats.flatMap(stat => definedNames(stat).map(Member(stat, _)))
@@ -147,7 +153,7 @@ private[scalafix] object Scopes {
       case defn: Defn.ExtensionGroup => extensionMembers(defn)
       case _                         => Nil
     }
-    Some(Scope(stats, fieldsFirst = isClassLike(stat)))
+    Some(Scope(stats, classBody = isClassLike(stat)))
       .filter(_.stats.nonEmpty)
   }
 
@@ -172,7 +178,7 @@ private[scalafix] object Scopes {
 
   private def scopesIn(stats: List[Stat]): List[Scope] = {
     val (packages, members) = stats.partition(_.isInstanceOf[Pkg])
-    Scope(members, fieldsFirst = false) :: packages.flatMap(scopes)
+    Scope(members, classBody = false) :: packages.flatMap(scopes)
   }
 
   def templateOf(stat: Stat): Option[Template] = stat match {

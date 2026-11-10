@@ -21,8 +21,8 @@ import scalafix.v1.*
 //     goes below the type it extends, even where that type names it.
 //   - Roots, which nothing in the scope uses, come public before private and
 //     then by name; so does anything a cycle leaves undecided.
-//   - A class, trait or enum body puts its fields (strict vals and vars)
-//     first, then everything else.
+//   - A class, trait or enum body puts its declarations (abstract members)
+//     first, then its fields (strict vals and vars), then everything else.
 //
 // The rule rewrites a scope that is out of order, so `scalafixAll` fixes it
 // and `scalafixAll --check` fails on it. A comment directly above a definition
