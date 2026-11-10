@@ -86,7 +86,10 @@ extension block. Each scope has exactly one order:
   runs nothing.
 - **Whatever the uses leave open goes public before private, then by name.**
   That covers a scope's roots (entry points, and siblings that share no use) and
-  the members of a cycle that no root leads into.
+  the members of a cycle that no root leads into. Here `protected` counts as
+  private, qualified or not, and overloads that share a name are ordered by
+  their source text, so the result never depends on the order they were written
+  in.
 - **A class, trait or enum body puts its fields (strict `val`s and `var`s)
   first**, then everything else. Each part is ordered as above.
 

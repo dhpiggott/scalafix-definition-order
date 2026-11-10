@@ -72,6 +72,8 @@ private[scalafix] object Scopes {
     canonical.map(_.pos.start) == members.map(_.stat.pos.start)
   }
 
+  // Not public, for ordering: `protected` counts as private too, so the
+  // public interface reads first and everything narrower follows it.
   def isPrivate(stat: Stat): Boolean =
     modsOf(stat).exists {
       case _: Mod.Private | _: Mod.Protected => true
