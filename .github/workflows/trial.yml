@@ -11,6 +11,7 @@ name: Trial
 # the rewrite breaks a project that compiled before it; a rewrite you don't
 # like is something to read, not a failure.
 on:
+  pull_request:
   workflow_dispatch:
   workflow_call:
 
