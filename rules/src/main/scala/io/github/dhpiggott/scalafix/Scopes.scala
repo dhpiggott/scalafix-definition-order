@@ -58,8 +58,9 @@ private[scalafix] object Scopes {
       symbols: Set[Symbol]
   )
 
-  // An item's index in its scope's `items`. Orders, edges and phases are made
-  // of these; most of the other Ints are offsets into the file.
+  // An item's index in its scope's `items`. Orders, edges and phases (see
+  // `CanonicalOrder.orderOf`) are made of these; most of the other Ints are
+  // offsets into the file.
   type ItemId = Int
 
   // A scope's items, and the order they go in (their ids, top to bottom).

@@ -76,6 +76,9 @@ private[scalafix] final class CanonicalOrder(source: SourceText)(implicit
     val waits = Walk.reverse(children).map(_.toSet)
     val component = Walk.stronglyConnected(items.size, pulls, children)
     val walk = new Walk(items, pulls, children, waits, component)
+    // The walk runs in phases, each placing all of its items before the next
+    // starts. A class, trait or enum body has two, its fields and then the
+    // rest, which is how its fields come first; any other scope has one.
     val phases =
       if (!scope.fieldsFirst) List(items.indices)
       else {
