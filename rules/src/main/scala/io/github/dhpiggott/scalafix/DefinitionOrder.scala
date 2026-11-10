@@ -19,8 +19,9 @@ import scalafix.v1.*
 //   - A type, and a strict val another strict val's initialiser reads, goes
 //     immediately above the first item that needs it, except that a subtype
 //     goes below the type it extends, even where that type names it.
-//   - Roots, which nothing in the scope uses, come public before private and
-//     then by name; so does anything a cycle leaves undecided.
+//   - Roots, which nothing in the scope uses, come public, then protected,
+//     then private, and then by name; so does anything a cycle leaves
+//     undecided.
 //   - A class, trait or enum body puts its declarations (abstract members)
 //     first, then its fields (strict vals and vars), then everything else.
 //

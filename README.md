@@ -84,12 +84,13 @@ extension block. Each scope has exactly one order:
   uses it. What an initialiser runs includes the `def`s it calls, the body of a
   class it constructs, and the companion object it touches. A type it only names
   runs nothing.
-- **Whatever the uses leave open goes public before private, then by name.**
+- **Whatever the uses leave open goes public, then protected, then private,
+  then by name.**
   That covers a scope's roots (entry points, and siblings that share no use) and
-  the members of a cycle that no root leads into. Here `protected` counts as
-  private, qualified or not, and overloads that share a name are ordered by
-  their source text, so the result never depends on the order they were written
-  in.
+  the members of a cycle that no root leads into. A qualified modifier, such as
+  `private[pkg]`, counts the same as a bare one, and overloads that share a
+  name are ordered by their source text, so the result never depends on the
+  order they were written in.
 - **A class, trait or enum body puts its declarations first, then its fields**
   (strict `val`s and `var`s), then everything else. A declaration is an
   abstract member, a `def`, `val`, `var`, `type` or `given` with no body, so a
@@ -122,8 +123,7 @@ Where it goes its own way:
   last of them, which can leave it some way from the first.
 - **Conceptual affinity.** The chapter groups related functions that don't
   call each other, such as a family of overloads. Nothing in the code tells the
-  rule they are related, so it orders them public before private, then by
-  name. Wrap them in `scalafix:off` to keep a grouping like that.
+  rule they are related, so it orders them by visibility, then by name. Wrap them in `scalafix:off` to keep a grouping like that.
 - **Initialisation order.** A strict `val` must come before anything that
   reads it while initialising, even when that puts it above a `def` that uses
   it. This is how Scala works, not a style choice, and the chapter doesn't

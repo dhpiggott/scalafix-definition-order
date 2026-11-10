@@ -47,13 +47,32 @@ private[scalafix] object Scopes {
     def overlaps(other: Span): Boolean = start < other.end && other.start < end
   }
 
-  // How whatever the uses leave open is ordered: public before private, then
-  // by name, then by source text, which tells overloads apart.
-  final case class SortKey(isPrivate: Boolean, name: String, source: String)
+  // Where a definition can be seen from, widest first. A qualified
+  // modifier, such as `private[pkg]`, is the same tier as a bare one.
+  sealed abstract class Visibility(val rank: Int)
+
+  object Visibility {
+    case object Private extends Visibility(2)
+
+    case object Protected extends Visibility(1)
+
+    case object Public extends Visibility(0)
+
+    implicit val ordering: Ordering[Visibility] = Ordering.by(_.rank)
+  }
+
+  // How whatever the uses leave open is ordered: public, then protected,
+  // then private, then by name, then by source text, which tells overloads
+  // apart.
+  final case class SortKey(
+      visibility: Visibility,
+      name: String,
+      source: String
+  )
 
   object SortKey {
     implicit val ordering: Ordering[SortKey] =
-      Ordering.by(key => (key.isPrivate, key.name, key.source))
+      Ordering.by(key => (key.visibility, key.name, key.source))
   }
 
   // What the rule moves as one: a definition, a class or trait with its
@@ -80,22 +99,6 @@ private[scalafix] object Scopes {
   def isInOrder(members: List[Member], ordered: Ordered): Boolean = {
     val canonical = ordered.order.flatMap(ordered.items(_).stats)
     canonical.map(_.pos.start) == members.map(_.stat.pos.start)
-  }
-
-  // Not public, for ordering: `protected` counts as private too, so the
-  // public interface reads first and everything narrower follows it.
-  def isPrivate(stat: Stat): Boolean =
-    modsOf(stat).exists {
-      case _: Mod.Private | _: Mod.Protected => true
-      case _                                 => false
-    }
-
-  // Every definition with modifiers is a `Stat.WithMods`, so this needs no
-  // list of kinds that a new one could be missing from. Only a statement
-  // that can't take modifiers, such as an import or an expression, has none.
-  private def modsOf(stat: Stat): List[Mod] = stat match {
-    case withMods: Stat.WithMods => withMods.mods
-    case _                       => Nil
   }
 
   def isStrict(stat: Stat): Boolean = stat match {
@@ -210,5 +213,21 @@ private[scalafix] object Scopes {
     case defn: Defn.Trait  => Some(defn.templ)
     case defn: Defn.Enum   => Some(defn.templ)
     case _                 => None
+  }
+
+  def visibilityOf(stat: Stat): Visibility =
+    modsOf(stat)
+      .collectFirst {
+        case _: Mod.Private   => Visibility.Private
+        case _: Mod.Protected => Visibility.Protected
+      }
+      .getOrElse(Visibility.Public)
+
+  // Every definition with modifiers is a `Stat.WithMods`, so this needs no
+  // list of kinds that a new one could be missing from. Only a statement
+  // that can't take modifiers, such as an import or an expression, has none.
+  private def modsOf(stat: Stat): List[Mod] = stat match {
+    case withMods: Stat.WithMods => withMods.mods
+    case _                       => Nil
   }
 }

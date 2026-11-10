@@ -136,7 +136,7 @@ private[scalafix] final class CanonicalOrder(source: SourceText)(implicit
           stats = stats,
           kept = kept,
           key = SortKey(
-            isPrivate = isPrivate(lead),
+            visibility = visibilityOf(lead),
             name = names.head.value,
             source = source.text.substring(lead.pos.start, lead.pos.end)
           ),
