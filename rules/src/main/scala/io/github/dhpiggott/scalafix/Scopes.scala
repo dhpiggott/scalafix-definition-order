@@ -80,21 +80,12 @@ private[scalafix] object Scopes {
       case _                                 => false
     }
 
+  // Every definition with modifiers is a `Stat.WithMods`, so this needs no
+  // list of kinds that a new one could be missing from. Only a statement
+  // that can't take modifiers, such as an import or an expression, has none.
   private def modsOf(stat: Stat): List[Mod] = stat match {
-    case defn: Defn.Def        => defn.mods
-    case defn: Defn.Val        => defn.mods
-    case defn: Defn.Var        => defn.mods
-    case defn: Defn.Type       => defn.mods
-    case defn: Defn.Class      => defn.mods
-    case defn: Defn.Trait      => defn.mods
-    case defn: Defn.Object     => defn.mods
-    case defn: Defn.Enum       => defn.mods
-    case defn: Defn.Given      => defn.mods
-    case defn: Defn.GivenAlias => defn.mods
-    case decl: Decl.Def        => decl.mods
-    case decl: Decl.Val        => decl.mods
-    case decl: Decl.Type       => decl.mods
-    case _                     => Nil
+    case withMods: Stat.WithMods => withMods.mods
+    case _                       => Nil
   }
 
   def isStrict(stat: Stat): Boolean = stat match {
