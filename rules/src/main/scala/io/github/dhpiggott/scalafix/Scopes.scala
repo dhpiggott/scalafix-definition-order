@@ -177,6 +177,9 @@ private[scalafix] object Scopes {
       .filter(_.stats.nonEmpty)
   }
 
+  // `extension (x: Int) def double = x * 2` has the one method as its body.
+  // With several methods, indented or in braces, scalameta holds them in a
+  // block, which is a `Term` (its type for expressions) like any other.
   private def extensionMembers(defn: Defn.ExtensionGroup): List[Stat] =
     defn.body match {
       case block: Term.Block => block.stats
