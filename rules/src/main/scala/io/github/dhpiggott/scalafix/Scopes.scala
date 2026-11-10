@@ -99,7 +99,9 @@ private[scalafix] object Scopes {
     case _                           => isClassLike(stat)
   }
 
-  // Only a class, trait or enum body is `fieldsFirst`.
+  // Only a class, trait or enum body is `fieldsFirst`: its fields are each
+  // instance's state. The strict vals of an object, an extension block or a
+  // file's top level are constants, placed by their uses like a `def`.
   final case class Scope(stats: List[Stat], fieldsFirst: Boolean)
 
   def membersOf(scope: Scope): List[Member] =
