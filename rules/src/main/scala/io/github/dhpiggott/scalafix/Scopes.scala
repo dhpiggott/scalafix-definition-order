@@ -52,11 +52,12 @@ private[scalafix] object Scopes {
   sealed abstract class Visibility(val rank: Int)
 
   object Visibility {
-    case object Private extends Visibility(2)
-
-    case object Protected extends Visibility(1)
-
+    // Kept widest first, as they rank, rather than by name.
+    // scalafix:off DefinitionOrder
     case object Public extends Visibility(0)
+    case object Protected extends Visibility(1)
+    case object Private extends Visibility(2)
+    // scalafix:on DefinitionOrder
 
     implicit val ordering: Ordering[Visibility] = Ordering.by(_.rank)
   }
