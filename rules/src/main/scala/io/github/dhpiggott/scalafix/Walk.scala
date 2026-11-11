@@ -7,7 +7,9 @@ import io.github.dhpiggott.scalafix.Scopes.*
 // The depth-first walk. `pulls` are what an item needs directly above it
 // (types it names, strict vals its initialiser reads), placed just before
 // it; `children` are what it uses, each placed once everything that uses it
-// outside its own cycle has been. `component(id)` numbers the cycle an item
+// outside its own cycle has been. `waits` is `children` reversed: for each
+// item, the items it is a child of, which is what it waits for before it
+// can be placed (see `isReady`). `component(id)` numbers the cycle an item
 // is in (its strongly connected component), so two items with the same
 // number are in one cycle, and an item in no cycle has a number of its own.
 private[scalafix] final class Walk(
