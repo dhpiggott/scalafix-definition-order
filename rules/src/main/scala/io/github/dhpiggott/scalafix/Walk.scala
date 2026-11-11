@@ -24,25 +24,38 @@ private[scalafix] final class Walk(
 
   private val pulled = pulls.flatten.toSet
 
+  private val pullers = Walk.reverse(pulls)
+
   private var reversed = List.empty[ItemId]
 
   // Anything the walk didn't reach from a root, such as the members of a
-  // cycle no root leads into: ready ones first, then in key order, leaving
-  // what something pulls for that to place.
+  // cycle no root leads into: the first in key order that is free. One
+  // always is while any are left, since the cycles the edges form can be
+  // ordered top to bottom, and the members of the top one are free. If none
+  // is, the edges are wrong, which is a bug in the rule.
   @tailrec def finish(phase: Set[ItemId]): Unit = {
     val remaining = phase.filterNot(placed(_)).toList.sortBy(items(_).key)
-    val candidates = remaining.filterNot(pulled)
-    val next = candidates
-      .find(isReady)
-      .orElse(candidates.headOption)
-      .orElse(remaining.headOption)
-    next match {
-      case Some(id) =>
-        visit(id, phase)
-        finish(phase)
-      case None => ()
+    if (remaining.nonEmpty) {
+      val next = remaining.find(isFree).getOrElse {
+        throw new IllegalStateException(
+          s"No definition is free to place next among ${remaining.size}. " +
+            "This is a bug in the rule; please report it."
+        )
+      }
+      visit(next, phase)
+      finish(phase)
     }
   }
+
+  // Ready, and with nothing left to pull it: everything that pulls it is
+  // placed or in its own cycle, as two types that name each other are. Such
+  // an item can go next without landing above anything that should be
+  // above it.
+  private def isFree(id: ItemId): Boolean =
+    isReady(id) &&
+      pullers(id).forall(puller =>
+        placed(puller) || component(puller) == component(id)
+      )
 
   def visit(id: ItemId, phase: Set[ItemId]): Unit =
     if (!placed(id)) {
