@@ -62,6 +62,9 @@ private[scalafix] final class Walk(
       before :+ id
     }
 
+  // Whether every user of the item has been placed, so it can go next
+  // without landing above one. Users in its own cycle don't count, since
+  // the cycle's members can't all go below each other.
   def isReady(id: ItemId): Boolean =
     waits(id).forall(user => placed(user) || component(user) == component(id))
 
