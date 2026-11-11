@@ -124,12 +124,13 @@ private[scalafix] object Scopes {
       if (names.isEmpty) None else Some(Member(stat, names))
     }
 
-  // The names a statement defines, or none if it isn't a definition. `Stat`
-  // also covers imports, expressions and enum cases, so the match can't be
-  // exhaustive. A `val` or `var` has patterns (`pats`) on its left rather
-  // than a name: `val a, b = 0` has two, and `val (x, y) = pair` one, which
-  // binds two names. An anonymous given's name is empty; nothing can refer
-  // to it, so it defines nothing here.
+  // The names a statement defines, or none if it isn't a definition, such as
+  // an import, an expression or an enum case. Even split into `Defn` and
+  // `Decl`, the match can't be checked as exhaustive: both also have
+  // quasiquote subtypes, private to scalameta. A `val` or `var` has patterns
+  // (`pats`) on its left rather than a name: `val a, b = 0` has two, and
+  // `val (x, y) = pair` one, which binds two names. An anonymous given's name
+  // is empty; nothing can refer to it, so it defines nothing here.
   private def definedNames(stat: Stat): List[Name] = {
     val names = stat match {
       case defn: Defn.Def            => List(defn.name)
