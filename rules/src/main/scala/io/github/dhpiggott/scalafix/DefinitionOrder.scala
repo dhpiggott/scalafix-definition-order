@@ -33,7 +33,9 @@ import scalafix.v1.*
 // Definitions between `// scalafix:off DefinitionOrder` and
 // `// scalafix:on DefinitionOrder` keep their written order, as one item that
 // the rest of the scope is ordered around. Scalafix drops any patch touching
-// that range, so the rule never edits inside it, only on either side.
+// that range, so the rule never edits inside it, only on either side. A
+// definition that holds such a range, or a `scalafix:ok` comment, likewise
+// stays where it is, and the rest of its scope is ordered around it.
 //
 // The implementation is in layers, one file each:
 //

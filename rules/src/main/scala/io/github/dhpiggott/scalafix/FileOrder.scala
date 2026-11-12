@@ -56,28 +56,37 @@ private[scalafix] final class FileOrder(implicit doc: SemanticDocument) {
         report(Position.Range(doc.input, span.start, span.end), message)
         None
       case None =>
-        // A kept range never moves, so the rest of the run is rewritten
-        // around it. The kept ranges split the run's text into segments
-        // (before the first, between each pair, after the last), and split
-        // the canonical order into groups the same way. Both splits are at
-        // the same kept items, so each segment has a group, and segment n is
-        // rewritten with group n's definitions. Written a, K, b, c with the
-        // order b, K, c, a, the segments hold [a] and [b, c], the groups are
-        // [b] and [c, a], and the result is b, K, c, a.
+        // An anchor (a kept range, or an item holding a suppression) never
+        // moves, so the rest of the run is rewritten around it. The anchors
+        // split the run's text into segments (before the first, between each
+        // pair, after the last), and split the canonical order into groups
+        // the same way. Both splits are at the same anchored items, so each
+        // segment has a group, and segment n is rewritten with group n's
+        // definitions. Written a, K, b, c with the order b, K, c, a, the
+        // segments hold [a] and [b, c], the groups are [b] and [c, a], and
+        // the result is b, K, c, a.
         val separator = "\n\n" + indent
-        val keptEdges = anchors.flatMap { anchor =>
+        val anchorEdges = anchors.flatMap { anchor =>
           List(anchor.block.start, anchor.block.end)
         }
-        val bounds = run.start :: (keptEdges :+ run.end)
+        val bounds = run.start :: (anchorEdges :+ run.end)
         val segments = bounds.grouped(2).toList.collect { case List(from, to) =>
           Span(from, to)
         }
-        val groups = splitAt(order, items).map(_.flatMap(items(_).stats))
+        val anchored = anchors.flatMap(_.anchoredItem).toSet
+        val groups =
+          splitAt(order, anchored).map(_.flatMap(items(_).stats))
+        // An anchor that is a kept range is left as written; one that only
+        // holds a suppression still has its own body ordered.
+        val anchorEdits = anchored.toList.sorted
+          .filter(items(_).kept.isEmpty)
+          .flatMap(items(_).stats)
+          .flatMap(editsWithin)
         val last = segments.size - 1
-        Some(segments.zip(groups).zipWithIndex.flatMap {
+        Some(anchorEdits ++ segments.zip(groups).zipWithIndex.flatMap {
           case ((segment, stats), index) =>
             // Where this segment's definitions start, as written. The
-            // segments are cut at the kept pieces' edges, so every other
+            // segments are cut at the anchors' edges, so every other
             // piece lies wholly inside one segment, and one that doesn't
             // start in this one is collected for the segment it's in.
             val written = pieces.collect {
@@ -114,13 +123,13 @@ private[scalafix] final class FileOrder(implicit doc: SemanticDocument) {
   private def report(position: Position, message: String): Unit =
     problems = Patch.lint(Misplaced(position, message)) :: problems
 
-  // The canonical order cut at each kept item, which stays where it is.
+  // The canonical order cut at each anchored item, which stays where it is.
   private def splitAt(
       order: List[ItemId],
-      items: Vector[Item]
+      anchored: Set[ItemId]
   ): List[List[ItemId]] =
     order.foldRight(List(List.empty[ItemId])) { (id, groups) =>
-      if (items(id).kept.isDefined) Nil :: groups
+      if (anchored(id)) Nil :: groups
       else (id :: groups.head) :: groups.tail
     }
 

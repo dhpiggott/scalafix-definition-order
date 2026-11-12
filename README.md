@@ -152,9 +152,12 @@ out of order and leaves it for you to fix by hand:
   a comment with a blank line below it, an enum `case`, or an anonymous
   `given`. The rule doesn't know which definition it belongs with, so it has
   nowhere to move it to.
-- **A definition that has to move contains a `scalafix:off` range or a
-  `scalafix:ok` comment.** Scalafix discards any edit inside one of those, so
-  only part of the move would be applied.
+- **Two definitions that each contain a `scalafix:off` range or a
+  `scalafix:ok` comment have to swap places.** Scalafix discards any edit
+  inside one of those, so a definition holding one, such as an object with a
+  range in its body, stays where it is and the rest of its scope is arranged
+  around it, as with a range of its own (see below). Two of them can't both
+  stay put and change places.
 
 ## Keeping an order the code can't express
 
@@ -186,7 +189,9 @@ lands where the whole group fits, which may suit neither. Keep a range to a
 small run that belongs together, and use two ranges for definitions that don't.
 
 Where the range sits in the file doesn't change, so the other definitions move
-around it instead. Whatever comes before the range in the order fills the space
+around it instead. The same goes for a definition with a range inside it, such
+as an object whose body holds one: the rule orders its body on either side of
+the range, but never moves the definition itself. Whatever comes before the range in the order fills the space
 above it, and the rest fills the space below, so how many definitions sit on
 each side can change from how they were written.
 
