@@ -1,0 +1,362 @@
+package io.github.dhpiggott.scalafix
+
+import scala.annotation.tailrec
+import scala.meta.Position
+import scala.meta.Stat
+import scala.meta.Token
+
+import io.github.dhpiggott.scalafix.Scopes.*
+import io.github.dhpiggott.scalafix.SourceText.*
+import scalafix.v1.*
+
+// A file as text: where its definitions and their comments start and end,
+// which parts of it the rule mustn't edit, and how an edit to it becomes a
+// patch. This is what decides whether a scope can be rewritten at all.
+private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
+
+  // Declared before `keptRanges` and `okLines`, whose initialisers read it.
+  private val tokens: Vector[Token] = doc.tokens.toVector
+
+  val text: String = doc.input.text
+
+  // The ranges a `scalafix:off` comment disables this rule for, from that
+  // comment to the end of the `scalafix:on` that ends it, or to the end of
+  // the file if nothing does. A `scalafix:on` with no range open, or a
+  // `scalafix:off` inside one, changes nothing; scalafix reports both as
+  // unused suppressions.
+  private val keptRanges: List[Span] = {
+    val markers = tokens.collect { case comment: Token.Comment =>
+      wordsOf(comment) match {
+        case "scalafix:off" :: rules if appliesHere(rules) =>
+          List(Marker(isOff = true, comment))
+        case "scalafix:on" :: rules if appliesHere(rules) =>
+          List(Marker(isOff = false, comment))
+        case _ => Nil
+      }
+    }.flatten
+    val (ranges, open) = markers.foldLeft(
+      (List.empty[Span], Option.empty[Int])
+    ) {
+      case ((ranges, None), Marker(true, off)) => (ranges, Some(off.start))
+      case ((ranges, Some(start)), Marker(false, on)) =>
+        (Span(start, on.end) :: ranges, None)
+      case (state, _) => state
+    }
+    (open.map(Span(_, text.length)).toList ++ ranges).reverse
+  }
+
+  // The lines a `scalafix:ok` comment disables this rule on.
+  private val okLines: List[Span] =
+    tokens.collect {
+      case comment: Token.Comment if isOkComment(comment) =>
+        Span(lineStart(comment.start), comment.end)
+    }.toList
+
+  private val tokenStarts: Array[Int] = tokens.map(_.start).toArray
+
+  def keptRangeOf(stat: Stat): Option[Span] =
+    keptRanges.find(_.contains(Span(stat.pos.start, stat.pos.end)))
+
+  // Why a scope can't be rewritten into `order`, if it can't, and where.
+  // Only whitespace may separate its definitions: anything else between two
+  // of them has nowhere to go once they move.
+  def obstacle(items: Vector[Item], order: List[ItemId]): Option[Obstacle] = {
+    val Run(pieces, run, indent, anchors) = runOf(items)
+    val anchored = anchors.flatMap(_.anchoredItem).toSet
+    val blocks = pieces.map(_.block)
+    val gaps = blocks.zip(blocks.drop(1)).map { case (before, after) =>
+      Span(before.end, after.start)
+    }
+    // An anchored class and companion are one block, so another
+    // definition written between them would have to move out of it.
+    val split = anchors.find { anchor =>
+      anchor.anchoredItem.exists(id =>
+        items(id).kept.isEmpty && items(id).stats.size > 1
+      ) && pieces.exists(piece =>
+        piece != anchor && anchor.block.overlaps(piece.block)
+      )
+    }
+    val blocked = gaps.find { gap =>
+      gap.start > gap.end || text.substring(gap.start, gap.end).trim.nonEmpty
+    }
+    (split, blocked) match {
+      case (Some(anchor), _) =>
+        Some(
+          Obstacle(
+            anchor.block,
+            "These definitions are out of order, but a class or its " +
+              "companion holds a scalafix:off range or a scalafix:ok " +
+              "comment, so the pair stays where it is, and something is " +
+              "written between them. Move them by hand."
+          )
+        )
+      case (None, Some(gap)) =>
+        Some(
+          Obstacle(
+            Span(gap.start, gap.end.max(gap.start)),
+            "These definitions are out of order, but something other than " +
+              "whitespace separates two of them, so they can't be moved " +
+              "automatically. A comment moves with the definition directly " +
+              "below it; one separated from it by a blank line doesn't."
+          )
+        )
+      case (None, None) if indent.trim.nonEmpty =>
+        Some(
+          Obstacle(
+            run,
+            "These definitions are out of order, but they don't start " +
+              "on a line of their own, so they can't be moved automatically."
+          )
+        )
+      case (None, None) if suppressedWithin(run, anchors.map(_.block)) =>
+        Some(
+          Obstacle(
+            run,
+            "These definitions are out of order, but a scalafix:off range " +
+              "or a scalafix:ok comment straddles two of them, and scalafix " +
+              "won't edit inside those. Move them by hand."
+          )
+        )
+      case (None, None)
+          if anchors.flatMap(_.anchoredItem) !=
+            order.filter(anchored.contains) =>
+        Some(
+          Obstacle(
+            run,
+            "These definitions are out of order, and putting them in " +
+              "order would move one that holds a scalafix:off range or a " +
+              "scalafix:ok comment past another, and the rule leaves those " +
+              "in place. Move them by hand."
+          )
+        )
+      case (None, None) => None
+    }
+  }
+
+  // A scope's definitions, laid out as written, as the pieces a rewrite
+  // moves.
+  def runOf(items: Vector[Item]): Run = {
+    val pieces = items.indices.toList
+      .flatMap { id =>
+        val item = items(id)
+        if (item.kept.isDefined) List(Piece(keptBlockOf(item), Some(id)))
+        else if (holdsSuppression(item)) {
+          val blocks = item.stats.map(blockOf)
+          List(
+            Piece(
+              Span(blocks.map(_.start).min, blocks.map(_.end).max),
+              Some(id)
+            )
+          )
+        } else item.stats.map(stat => Piece(blockOf(stat), None))
+      }
+      .sortBy(_.block.start)
+    val run = Span(pieces.head.block.start, pieces.last.block.end)
+    Run(
+      pieces = pieces,
+      span = run,
+      indent = text.substring(lineStart(run.start), run.start),
+      anchors = pieces.filter(_.anchoredItem.isDefined)
+    )
+  }
+
+  // A kept item's block runs from its `scalafix:off` comment to the end of
+  // its `scalafix:on` one, when those sit directly against it, so that
+  // nothing the rule writes lands inside the range.
+  private def keptBlockOf(item: Item): Span = {
+    val range = item.kept.getOrElse(Span(0, 0))
+    val first = blockOf(item.stats.head).start
+    val last = blockOf(item.stats.last).end
+    val start =
+      if (range.start < first && onlyComments(range.start, first))
+        range.start
+      else first
+    val end =
+      if (last < range.end && onlyComments(last, range.end)) range.end
+      else last
+    Span(start, end)
+  }
+
+  private def onlyComments(from: Int, to: Int): Boolean =
+    text.substring(from, to).split('\n').forall { line =>
+      line.trim.isEmpty || line.trim.startsWith("//")
+    }
+
+  // Whether a `scalafix:off` range or a `scalafix:ok` comment lies within
+  // the item, such as in the body of an object. Scalafix drops any edit
+  // inside one, so the item can't be moved as text; it stays where it is,
+  // like a kept range, and the rest of its scope is ordered around it.
+  // Edits to its own body, outside the range, still apply.
+  private def holdsSuppression(item: Item): Boolean =
+    (keptRanges ++ okLines).exists { range =>
+      item.stats.exists(stat => blockOf(stat).overlaps(range))
+    }
+
+  // A definition together with the comments directly above it, the `end`
+  // marker closing it, and a comment trailing it on its last line.
+  def blockOf(stat: Stat): Span = {
+    val last = endMarkerEnd(stat).getOrElse(stat.pos.end)
+    val lineEnd = text.indexOf('\n', last) match {
+      case -1  => text.length
+      case end => end
+    }
+    val trailing = text.substring(last, lineEnd).trim
+    val end = if (trailing.startsWith("//")) lineEnd else last
+    Span(leadingStart(stat.pos.start), end)
+  }
+
+  // Scala 3 lets a definition close with `end <name>`, which scalameta parses
+  // as a statement of its own, after the definition rather than in it. It
+  // belongs to the definition all the same: left behind, it would close
+  // whatever moved in above it, which doesn't compile.
+  private def endMarkerEnd(stat: Stat): Option[Int] = {
+    val marker = EndMarker.pattern.matcher(text)
+    marker.region(stat.pos.end, text.length)
+    if (marker.lookingAt() && endMarkerNames(stat)(marker.group(1)))
+      Some(marker.end)
+    else None
+  }
+
+  // Walks up from a definition's first line over the comments directly
+  // above it, each starting a line of its own: `//` lines, and `/* */`
+  // blocks. It goes by tokens rather than text, because a block comment is
+  // one token however many lines it spans, nested comments included, and a
+  // `/*` found by searching the text could be one nested inside another. A
+  // blank line or code stops it.
+  @tailrec private def leadingStart(start: Int): Int = {
+    val currentLine = lineStart(start)
+    if (currentLine == 0 || text.substring(currentLine, start).trim.nonEmpty)
+      start
+    else {
+      // The token holding the line break above. One holding two is a blank
+      // line.
+      val lineBreak = firstTokenFrom(currentLine) - 1
+      val above =
+        if (tokens(lineBreak).text.count(_ == '\n') > 1) None
+        else
+          (lineBreak - 1 to 0 by -1).iterator
+            .map(tokens)
+            .find(token => !isHorizontalSpace(token))
+      above match {
+        case Some(comment: Token.Comment)
+            if text
+              .substring(lineStart(comment.start), comment.start)
+              .trim
+              .isEmpty =>
+          leadingStart(comment.start)
+        case _ => start
+      }
+    }
+  }
+
+  private def lineStart(offset: Int): Int =
+    text.lastIndexOf('\n', offset - 1) + 1
+
+  private def isHorizontalSpace(token: Token): Boolean =
+    token.isInstanceOf[Token.Whitespace] && !token.text.contains('\n')
+
+  // Whether a suppressed range overlaps the part of the run the rule would
+  // rewrite: all of the run except the anchors. Every range inside a
+  // definition makes it an anchor, so this only finds one that reaches
+  // across from one definition into the next.
+  private def suppressedWithin(run: Span, anchors: List[Span]): Boolean =
+    (keptRanges ++ okLines).exists { range =>
+      range.overlaps(run) && !anchors.exists(_.contains(range))
+    }
+
+  // Scalafix patches whole tokens, so a replacement becomes the first token
+  // it covers replaced with the new text and the rest removed, and an edit
+  // covering nothing is an insertion beside whitespace. Every edit starts
+  // where a definition's block does, or at a kept range's edge, and those
+  // are always token boundaries; one that isn't is a bug in the rule, so it
+  // fails the run rather than leaving the scope as it is.
+  def toPatch(edit: Edit): Patch = {
+    val patch =
+      if (edit.start == edit.end) insertAt(edit.start, edit.text)
+      else {
+        val inside = tokens
+          .drop(firstTokenFrom(edit.start))
+          .takeWhile(_.end <= edit.end)
+          .toList
+        inside.headOption.filter(_.start == edit.start).map { first =>
+          Patch.removeTokens(inside.tail) + Patch.replaceToken(first, edit.text)
+        }
+      }
+    patch.getOrElse {
+      val position = Position.Range(doc.input, edit.start, edit.end)
+      throw new IllegalStateException(
+        s"DefinitionOrder: ${DefinitionOrder.pathOf(doc)}:${position.startLine + 1}: " +
+          "an edit doesn't start on a token boundary, so it can't be " +
+          "written as a patch. This is a bug in the rule; please report it."
+      )
+    }
+  }
+
+  // Beside whitespace rather than on the definition there, which may be
+  // the first token of a kept range.
+  private def insertAt(offset: Int, insertion: String): Option[Patch] = {
+    val index = firstTokenFrom(offset)
+    val nearby = tokens.slice(index - 2, index + 2)
+    val whitespace = nearby.filter(_.isInstanceOf[Token.Whitespace])
+    val before = whitespace.find(_.end == offset)
+    val after = whitespace.find(_.start == offset)
+    before
+      .map(Patch.addRight(_, insertion))
+      .orElse(after.map(Patch.addLeft(_, insertion)))
+  }
+
+  // The index of the first token starting at or after `offset`.
+  private def firstTokenFrom(offset: Int): Int = {
+    @tailrec def search(low: Int, high: Int): Int =
+      if (low >= high) low
+      else {
+        val middle = (low + high) >>> 1
+        if (tokenStarts(middle) < offset) search(middle + 1, high)
+        else search(low, middle)
+      }
+    search(0, tokenStarts.length)
+  }
+
+  private def isOkComment(comment: Token.Comment): Boolean =
+    wordsOf(comment) match {
+      case "scalafix:ok" :: rules => appliesHere(rules)
+      case _                      => false
+    }
+
+  // A comment's words, split on runs of whitespace and commas, so that
+  // `// scalafix:off DefinitionOrder, Other` reads as `scalafix:off`,
+  // `DefinitionOrder` and `Other`.
+  private def wordsOf(comment: Token.Comment): List[String] =
+    comment.value.trim.split("[\\s,]+").toList
+
+  private def appliesHere(rules: List[String]): Boolean =
+    rules.isEmpty || rules.contains("DefinitionOrder")
+}
+
+private[scalafix] object SourceText {
+
+  final case class Edit(start: Int, end: Int, text: String)
+
+  // Why a scope can't be rewritten, and the part of the file to report it at.
+  final case class Obstacle(span: Span, message: String)
+
+  // Part of a run of definitions: one definition's block, or the block of
+  // an item that stays where it is (a kept range, or one holding a
+  // suppression; see `holdsSuppression`), along with that item.
+  final case class Piece(block: Span, anchoredItem: Option[ItemId])
+
+  // A scope's definitions as written: the pieces, the span from the first to
+  // the last, the indent the first starts at, and the pieces that stay where
+  // they are.
+  final case class Run(
+      pieces: List[Piece],
+      span: Span,
+      indent: String,
+      anchors: List[Piece]
+  )
+
+  // `end`, on a line of its own after the definition, and the name it gives.
+  private val EndMarker = """\s*\n[ \t]*end[ \t]+`?([^`\s;]+)`?""".r
+
+  private final case class Marker(isOff: Boolean, comment: Token.Comment)
+}

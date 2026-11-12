@@ -1,0 +1,84 @@
+name: Trial
+
+# Runs the rule, built from the checked-out ref, over a few other projects, to
+# see what it does to code it wasn't written against. Each job prints the
+# rewrite and checks that the result still compiles; the job summary has the
+# totals. The list is committed rather than a dispatch input, so nothing runs
+# that a reviewed commit didn't name.
+#
+# It runs by hand, and as a gate in release.yml, so nothing is published
+# that breaks a project's build. A job fails only when the rule didn't run, or
+# the rewrite breaks a project that compiled before it; a rewrite you don't
+# like is something to read, not a failure.
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  trial:
+    name: Trial (${{ matrix.repo }})
+    runs-on: ubuntu-latest
+    # Unmeasured until the first run. Each job compiles another project's
+    # whole build with SemanticDB and then recompiles what the rule rewrote,
+    # and log4cats has JS and Native modules too. Tighten this once real runs
+    # show how long that takes.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      # Each project covers something the others don't:
+      # - sbt/sbt-ci-release: an sbt 1 plugin, so Scala 2.12.
+      # - scala/scala3-example-project: a Scala 3 sample.
+      # - scalameta/munit: macro-heavy code, with suites built from test
+      #   registrations, where the rule's view of uses is weakest and its
+      #   diagnostics are most common.
+      # - scopt/scopt: a library cross-built with sbt 2.
+      # - softwaremill/ox: idiomatic modern Scala 3, with fewer braces,
+      #   givens, extensions, enums, opaque types and end markers.
+      # - typelevel/log4cats: a Typelevel library on Scala 2.13 and 3.
+      #
+      # Left out on purpose:
+      # - Plutus, the project the rule was written for, would be the best
+      #   test, but it only builds on macOS, and these jobs run on Linux.
+      # - cats and smithy4s are too large. Every publish waits on this
+      #   workflow, and either would add tens of minutes to it.
+      matrix:
+        repo:
+          - sbt/sbt-ci-release
+          - scala/scala3-example-project
+          - scalameta/munit
+          - scopt/scopt
+          - softwaremill/ox
+          - typelevel/log4cats
+    steps:
+      # A shallow clone is fine here: trial.sh sets the rule's version
+      # itself, so nothing reads the tag history.
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version-file: .java-version
+          cache: sbt
+
+      - name: Set up sbt
+        uses: sbt/setup-sbt@v1
+
+      # Builds the rule, runs it over the project, prints the rewrite and its
+      # diagnostics, and fails only if the rewritten project no longer
+      # compiles.
+      - name: Run the rule over ${{ matrix.repo }}
+        run: .github/scripts/trial.sh ${{ matrix.repo }}
+
+      - name: Upload the rewrite
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: trial-${{ strategy.job-index }}
+          path: |
+            diff.patch
+            scalafix.log
