@@ -126,40 +126,39 @@ private[scalafix] object Scopes {
     }
 
   // The names a statement defines, or none if it isn't a definition, such as
-  // an import, an expression or an enum case. Even split into `Defn` and
-  // `Decl`, the match can't be checked as exhaustive: both also have
-  // quasiquote subtypes, private to scalameta. A `val` or `var` has patterns
-  // (`pats`) on its left rather than a name: `val a, b = 0` has two, and
-  // `val (x, y) = pair` one, which binds two names. An anonymous given's name
-  // is empty; nothing can refer to it, so it defines nothing here.
+  // an import or an expression. An anonymous given's name is empty; nothing
+  // can refer to it, so it defines nothing here.
   private def definedNames(stat: Stat): List[Name] = {
     val names = stat match {
-      case defn: Defn.Def            => List(defn.name)
-      case defn: Defn.Macro          => List(defn.name)
-      case defn: Defn.Val            => defn.pats.flatMap(patternNames)
-      case defn: Defn.Var            => defn.pats.flatMap(patternNames)
-      case defn: Defn.Type           => List(defn.name)
-      case defn: Defn.Class          => List(defn.name)
-      case defn: Defn.Trait          => List(defn.name)
-      case defn: Defn.Object         => List(defn.name)
-      case defn: Defn.Enum           => List(defn.name)
-      case defn: Defn.Given          => List(defn.name)
-      case defn: Defn.GivenAlias     => List(defn.name)
-      case defn: Defn.ExtensionGroup => extensionNames(defn)
-      case decl: Decl.Def            => List(decl.name)
-      case decl: Decl.Val            => decl.pats.flatMap(patternNames)
-      case decl: Decl.Var            => decl.pats.flatMap(patternNames)
-      case decl: Decl.Type           => List(decl.name)
-      case decl: Decl.Given          => List(decl.name)
-      case _                         => Nil
+      case defn: Defn => definitionNames(defn)
+      case decl: Decl => declarationNames(decl)
+      case _          => Nil
     }
     names.filter(_.value.nonEmpty)
   }
 
-  // `Pat.Var` is the only pattern that binds a name; `collect` finds it
-  // inside the others, such as a tuple, `x @ ...` or `x: T`.
-  private def patternNames(pat: Pat): List[Name] =
-    pat.collect { case Pat.Var(name) => name }
+  // Every kind of `Defn` is named, so the only ones the last case can see
+  // are scalameta's quasiquote placeholders, which parsed source never holds;
+  // they're private to scalameta, so the compiler can't be shown that.
+  // A `val` or `var` has patterns (`pats`) on its left rather than a name:
+  // `val a, b = 0` has two, and `val (x, y) = pair` one, which binds two
+  // names. An enum case is part of its enum, not a definition of its own.
+  private def definitionNames(defn: Defn): List[Name] = defn match {
+    case defn: Defn.Def            => List(defn.name)
+    case defn: Defn.Macro          => List(defn.name)
+    case defn: Defn.Val            => defn.pats.flatMap(patternNames)
+    case defn: Defn.Var            => defn.pats.flatMap(patternNames)
+    case defn: Defn.Type           => List(defn.name)
+    case defn: Defn.Class          => List(defn.name)
+    case defn: Defn.Trait          => List(defn.name)
+    case defn: Defn.Object         => List(defn.name)
+    case defn: Defn.Enum           => List(defn.name)
+    case defn: Defn.Given          => List(defn.name)
+    case defn: Defn.GivenAlias     => List(defn.name)
+    case defn: Defn.ExtensionGroup => extensionNames(defn)
+    case _: Defn.EnumCase | _: Defn.RepeatedEnumCase => Nil
+    case _                                           => Nil
+  }
 
   // An extension's methods can be abstract, in a trait.
   private def extensionNames(defn: Defn.ExtensionGroup): List[Name] =
@@ -168,6 +167,22 @@ private[scalafix] object Scopes {
       case member: Decl.Def => List(member.name)
       case _                => Nil
     }
+
+  // As with `definitionNames`, every kind is named, and the last case is
+  // for quasiquote placeholders only.
+  private def declarationNames(decl: Decl): List[Name] = decl match {
+    case decl: Decl.Def   => List(decl.name)
+    case decl: Decl.Val   => decl.pats.flatMap(patternNames)
+    case decl: Decl.Var   => decl.pats.flatMap(patternNames)
+    case decl: Decl.Type  => List(decl.name)
+    case decl: Decl.Given => List(decl.name)
+    case _                => Nil
+  }
+
+  // `Pat.Var` is the only pattern that binds a name; `collect` finds it
+  // inside the others, such as a tuple, `x @ ...` or `x: T`.
+  private def patternNames(pat: Pat): List[Name] =
+    pat.collect { case Pat.Var(name) => name }
 
   def nested(stat: Stat): Option[Scope] = {
     val stats = stat match {
