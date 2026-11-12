@@ -47,10 +47,11 @@ private[scalafix] final class Walk(
     }
   }
 
-  // Ready, and with nothing left to pull it: everything that pulls it is
-  // placed or in its own cycle, as two types that name each other are. Such
-  // an item can go next without landing above anything that should be
-  // above it.
+  // Whether the item can go next. It must be ready, so it won't land above
+  // one of its users. And nothing still to be placed may pull it: what
+  // pulls an item places it directly above itself, so placing it now would
+  // leave it stranded further up. A puller in the item's own cycle doesn't
+  // count, as with two types that name each other, which pull each other.
   private def isFree(id: ItemId): Boolean =
     isReady(id) &&
       pullers(id).forall(puller =>
