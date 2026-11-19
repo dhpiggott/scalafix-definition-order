@@ -20,7 +20,11 @@ private[scalafix] final class CanonicalOrder(source: SourceText)(implicit
   private val inferredUses: List[Occurrence] = Synthetics.inferredUses(doc)
 
   // Each scope's canonical order, keyed by the scope's own list of
-  // statements: two scopes can be equal as trees, but never the same list.
+  // statements, compared by reference, so a lookup doesn't hash the whole
+  // list. A scope's list is the one its tree holds, so it is the same each
+  // time it's read, except for an extension with a single method, whose
+  // list `Scopes.nested` builds afresh; that only means its one-item order
+  // is worked out again.
   private val orders =
     new java.util.IdentityHashMap[List[Stat], Ordered]
 
