@@ -76,8 +76,11 @@ private[scalafix] final class FileOrder(implicit doc: SemanticDocument) {
         val anchored = anchors.flatMap(_.anchoredItem).toSet
         val groups =
           splitAt(order, anchored).map(_.flatMap(items(_).stats))
-        // An anchor that is a kept range is left as written; one that only
-        // holds a suppression still has its own body ordered.
+        // The anchors' own bodies. A kept range, such as `Log`'s levels, is
+        // all suppressed, so there is nothing in it to edit. An item that
+        // holds a suppression, such as an object with a kept range among
+        // the other definitions in its body, doesn't move, but those other
+        // definitions are still ordered around the range inside it.
         val anchorEdits = anchored.toList.sorted
           .filter(items(_).kept.isEmpty)
           .flatMap(items(_).stats)
