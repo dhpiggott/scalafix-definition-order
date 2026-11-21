@@ -282,11 +282,13 @@ private[scalafix] final class CanonicalOrder(source: SourceText)(implicit
     ): List[ItemId] = todo match {
       case Nil        => found.reverse
       case id :: rest =>
-        if (seen(id) || id == start) loop(rest, seen, found)
+        if (seen(id)) loop(rest, seen, found)
         else if (items(id).isStrict) loop(rest, seen + id, id :: found)
         else loop(executed(id) ++ rest, seen + id, found)
     }
-    loop(executed(start), Set.empty, Nil)
+    // `start` counts as seen, so a trail leading back to it, as in
+    // `val x = f` with `def f = x`, doesn't list it as one of its own reads.
+    loop(executed(start), Set(start), Nil)
   }
 }
 
