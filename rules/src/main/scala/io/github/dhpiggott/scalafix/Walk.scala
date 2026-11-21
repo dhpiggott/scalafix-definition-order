@@ -50,12 +50,16 @@ private[scalafix] final class Walk(
   // Whether the item can go next. It must be ready, so it won't land above
   // one of its users. And nothing still to be placed may pull it: what
   // pulls an item places it directly above itself, so placing it now would
-  // leave it stranded further up. A puller in the item's own cycle doesn't
-  // count, as with two types that name each other, which pull each other.
+  // leave it stranded further up. Two kinds of puller don't count. One in
+  // the item's own cycle, as with two types that name each other, which
+  // pull each other. And one that is also the item's child, as with a
+  // subtype its sealed supertype names: the child waits for the item, so it
+  // could never go first, and the walk visits it straight after the item.
   private def isFree(id: ItemId): Boolean =
     isReady(id) &&
       pullers(id).forall(puller =>
-        placed(puller) || component(puller) == component(id)
+        placed(puller) || component(puller) == component(id) ||
+          children(id).contains(puller)
       )
 
   def visit(id: ItemId, phase: Set[ItemId]): Unit =
