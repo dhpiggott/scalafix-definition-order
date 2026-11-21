@@ -189,7 +189,7 @@ private[scalafix] final class CanonicalOrder(source: SourceText)(implicit
     val kept = items(id).kept.isDefined
     val mentioned = (named ++ inferred)
       .sortBy { occurrence =>
-        if (kept) List(Place.InHeader(occurrence.offset))
+        if (kept) List(Place.AsWritten(occurrence.offset))
         else settledKey(stats, occurrence.offset)
       }
       .flatMap { occurrence =>
@@ -214,9 +214,10 @@ private[scalafix] final class CanonicalOrder(source: SourceText)(implicit
         case (stat, index) if covers(stat, offset) =>
           Place.InItem(index) :: keyWithin(stat, offset)
       }
-      .getOrElse(List(Place.InHeader(offset)))
+      .getOrElse(List(Place.AsWritten(offset)))
 
-  // Inside a definition, anything before its body (its header) comes first,
+  // Inside a definition, whatever keeps its written place comes first (the
+  // part before its body, or all of a definition with no body to reorder),
   // then its body's items in the order they will be in.
   private def keyWithin(stat: Stat, offset: Int): List[Place] =
     settledOrder(stat)
@@ -224,12 +225,12 @@ private[scalafix] final class CanonicalOrder(source: SourceText)(implicit
         order.zipWithIndex.collectFirst {
           case (id, position) if items(id).stats.exists(covers(_, offset)) =>
             val inside =
-              if (items(id).kept.isDefined) List(Place.InHeader(offset))
+              if (items(id).kept.isDefined) List(Place.AsWritten(offset))
               else settledKey(items(id).stats, offset)
             Place.InItem(position) :: inside
         }
       }
-      .getOrElse(List(Place.InHeader(offset)))
+      .getOrElse(List(Place.AsWritten(offset)))
 
   // The order the scope nested in a definition will end up in: its
   // canonical order, unless the rule can't rewrite it, which leaves it as
@@ -331,20 +332,23 @@ private[scalafix] object CanonicalOrder {
       executed: List[ItemId]
   )
 
-  // One step of where an offset will end up, outermost first: at that offset
-  // among what isn't an item (a definition's header, say, or anything inside
-  // a kept range, which keeps its written order), or inside the item at a
-  // position in its scope's settled order. A header comes before its body.
+  // One step of where an offset will end up, outermost first: inside the
+  // item at a position in its scope's settled order, or, outside any item
+  // the rule reorders, at its written offset. What stays as written is the
+  // part of a class, trait, object or enum before its body; all of a `def`
+  // or `val`, which has no body to reorder; a statement that isn't a
+  // definition; and anything inside a kept range. It comes before the
+  // items, as a definition's header stays above its body.
   private sealed trait Place
 
   private object Place {
-    final case class InHeader(offset: Int) extends Place
+    final case class AsWritten(offset: Int) extends Place
 
     final case class InItem(position: Int) extends Place
 
     implicit val ordering: Ordering[Place] = Ordering.by {
-      case InHeader(offset) => (0, offset)
-      case InItem(position) => (1, position)
+      case AsWritten(offset) => (0, offset)
+      case InItem(position)  => (1, position)
     }
   }
 }
