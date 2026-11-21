@@ -4,7 +4,9 @@ A [Scalafix](https://scalacenter.github.io/scalafix/) rule that puts the
 definitions in each scope of a Scala file into one canonical order, and moves
 them there for you. It follows the "newspaper" layout from chapter 5 of *Clean
 Code*: a file reads from top to bottom, starting at its entry points and ending
-at its smallest helpers.
+at its smallest helpers. It reads from the bottom up too: since everything a
+definition uses sits below it, reading upwards you meet each helper before
+anything that calls it.
 
 The order is worked out from the code alone, so it never matters what order the
 definitions were written in. `scalafix DefinitionOrder` rewrites a file into
