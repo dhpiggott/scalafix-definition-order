@@ -5,6 +5,7 @@ import scala.math.Ordering.Implicits.*
 import scala.meta.Defn
 import scala.meta.Name
 import scala.meta.Stat
+import scala.meta.Type
 
 import io.github.dhpiggott.scalafix.CanonicalOrder.*
 import io.github.dhpiggott.scalafix.Scopes.*
@@ -251,10 +252,23 @@ private[scalafix] final class CanonicalOrder(source: SourceText)(implicit
     items(id).stats
       .flatMap(templateOf)
       .flatMap(_.inits)
-      .flatMap(_.tpe.collect { case name: Name => name.symbol })
+      .flatMap(init => parentName(init.tpe))
+      .map(_.symbol)
       .flatMap(ownerIn(owners, _))
       .filter(_ != id)
       .distinct
+
+  // The name of the type a parent is, leaving out its type arguments:
+  // `Node` in `Node[Item]`, which extends `Node` and only mentions `Item`.
+  // `Outer.Node` gives `Node`, which `ownerIn` traces back to `Outer`.
+  private def parentName(tpe: Type): Option[Name] = tpe match {
+    case name: Type.Name         => Some(name)
+    case select: Type.Select     => Some(select.name)
+    case project: Type.Project   => Some(project.name)
+    case apply: Type.Apply       => parentName(apply.tpe)
+    case annotate: Type.Annotate => parentName(annotate.tpe)
+    case _                       => None
+  }
 
   private def ownerIn(
       owners: Map[Symbol, ItemId],
