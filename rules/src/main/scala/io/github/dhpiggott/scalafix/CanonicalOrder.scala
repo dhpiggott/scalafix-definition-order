@@ -39,7 +39,9 @@ private[scalafix] final class CanonicalOrder(source: SourceText)(implicit
 
   private def orderOf(scope: Scope, members: List[Member]): Ordered = {
     val items = itemsOf(members)
-    // Which item defines each symbol, so a mention leads to the item used.
+    // The item that defines each symbol in the scope. A use in a body is a
+    // name with a symbol, and this is how it becomes a use of an item (see
+    // `ownerIn`, which also finds the item for a member nested inside one).
     val owners = items.indices
       .flatMap(id => items(id).symbols.map(_ -> id))
       .toMap
