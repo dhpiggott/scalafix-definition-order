@@ -263,7 +263,7 @@ private[scalafix] final class CanonicalOrder(source: SourceText)(implicit
     Iterator
       .iterate(symbol)(_.owner)
       .takeWhile(s => !s.isNone && !s.isRootPackage && !s.isEmptyPackage)
-      .collectFirst { case owner if owners.contains(owner) => owners(owner) }
+      .collectFirst(owners)
 
   // The strict vals a strict val's initialiser reads, directly or through
   // what it runs, all of which have to be initialised before it. `executed`
