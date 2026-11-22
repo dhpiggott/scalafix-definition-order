@@ -10,6 +10,5 @@ sealed trait Tree:
   def size: Int
   def isLeaf: Boolean = this match
     case Leaf(_) => true
-    case _       => false
 
 def count(tree: Tree): Int = tree.size

@@ -10,5 +10,5 @@ trait First
 class User:
   def callee: Second = new Second {}
   def caller: First =
-    callee
+    val _ = callee
     new First {}

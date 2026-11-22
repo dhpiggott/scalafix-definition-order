@@ -4,7 +4,7 @@ rule = DefinitionOrder
 package definitionorder.visibility
 
 class Basket:
-  private def apple: Int = 1
+  private[visibility] def apple: Int = 1
 
   protected def banana: Int = 2
 

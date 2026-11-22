@@ -6,7 +6,7 @@ trait Second
 
 class User:
   def caller: First =
-    callee
+    val _ = callee
     new First {}
 
   def callee: Second = new Second {}

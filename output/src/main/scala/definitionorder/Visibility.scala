@@ -5,4 +5,4 @@ class Basket:
 
   protected def banana: Int = 2
 
-  private def apple: Int = 1
+  private[visibility] def apple: Int = 1
