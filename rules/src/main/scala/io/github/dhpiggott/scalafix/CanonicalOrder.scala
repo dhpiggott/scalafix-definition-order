@@ -78,6 +78,9 @@ private[scalafix] final class CanonicalOrder(source: SourceText)(implicit
     val pulls = items.indices.toVector.map { user =>
       val reads =
         if (items(user).isStrict) strictReads(user, items, executed) else Nil
+      // One list, filtered, rather than the types and the reads joined:
+      // pulls are placed above the item in this order, so each keeps the
+      // place where the item first uses it. Every read is kept.
       val candidates = (uses(user) ++ reads).distinct
       candidates.filter { used =>
         (items(used).isType && !subtypes(user).contains(used)) ||
