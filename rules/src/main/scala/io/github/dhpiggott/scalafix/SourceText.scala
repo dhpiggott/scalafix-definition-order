@@ -194,16 +194,18 @@ private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
     }
 
   // A definition together with the comments directly above it, the `end`
-  // marker closing it, and a comment trailing it on its last line.
+  // marker closing it, and a comment trailing it on its last line. Which
+  // comments those are is scalameta's call: the parser attaches each comment
+  // to the tree beside it, and a blank line or code stops it, so a comment
+  // set off by a blank line belongs to nothing and doesn't move.
   def blockOf(stat: Stat): Span = {
-    val last = endMarkerEnd(stat).getOrElse(stat.pos.end)
-    val lineEnd = text.indexOf('\n', last) match {
-      case -1  => text.length
-      case end => end
-    }
-    val trailing = text.substring(last, lineEnd).trim
-    val end = if (trailing.startsWith("//")) lineEnd else last
-    Span(leadingStart(stat.pos.start), end)
+    val closing = endMarkerOf(stat).getOrElse(stat)
+    val leading = stat.begComment.flatMap(_.values.headOption)
+    val trailing = closing.endComment.flatMap(_.values.lastOption)
+    Span(
+      leading.fold(stat.pos.start)(_.pos.start),
+      trailing.fold(closing.pos.end)(_.pos.end)
+    )
   }
 
   // Scala 3 lets a definition close with `end <name>`, which scalameta parses
@@ -211,50 +213,15 @@ private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
   // of it. It belongs to the definition all the same: left behind, it would
   // close whatever moved in above it, which doesn't compile. A marker can
   // only close the definition directly above it, so its name needs no check.
-  private def endMarkerEnd(stat: Stat): Option[Int] =
+  private def endMarkerOf(stat: Stat): Option[Term.EndMarker] =
     stat.parent.flatMap { parent =>
       parent.children.dropWhile(_ ne stat).drop(1).headOption.collect {
-        case marker: Term.EndMarker => marker.pos.end
+        case marker: Term.EndMarker => marker
       }
     }
-
-  // Walks up from a definition's first line over the comments directly
-  // above it, each starting a line of its own: `//` lines, and `/* */`
-  // blocks. It goes by tokens rather than text, because a block comment is
-  // one token however many lines it spans, nested comments included, and a
-  // `/*` found by searching the text could be one nested inside another. A
-  // blank line or code stops it.
-  @tailrec private def leadingStart(start: Int): Int = {
-    val currentLine = lineStart(start)
-    if (currentLine == 0 || text.substring(currentLine, start).trim.nonEmpty)
-      start
-    else {
-      // The token holding the line break above. One holding two is a blank
-      // line.
-      val lineBreak = firstTokenFrom(currentLine) - 1
-      val above =
-        if (tokens(lineBreak).text.count(_ == '\n') > 1) None
-        else
-          (lineBreak - 1 to 0 by -1).iterator
-            .map(tokens)
-            .find(token => !isHorizontalSpace(token))
-      above match {
-        case Some(comment: Token.Comment)
-            if text
-              .substring(lineStart(comment.start), comment.start)
-              .trim
-              .isEmpty =>
-          leadingStart(comment.start)
-        case _ => start
-      }
-    }
-  }
 
   private def lineStart(offset: Int): Int =
     text.lastIndexOf('\n', offset - 1) + 1
-
-  private def isHorizontalSpace(token: Token): Boolean =
-    token.isInstanceOf[Token.Whitespace] && !token.text.contains('\n')
 
   // Whether a suppressed range overlaps the part of the run the rule would
   // rewrite: all of the run except the anchors. Every range inside a
