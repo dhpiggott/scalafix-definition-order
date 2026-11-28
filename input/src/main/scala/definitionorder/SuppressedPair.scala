@@ -3,7 +3,10 @@ rule = DefinitionOrder
 */
 package definitionorder.suppressedpair
 
-final case class Pair(value: Int): // assert: DefinitionOrder
+// Holds a kept range, so it stays where it is. So does its companion, and
+// entry, which names the type, moves out from between them to below the
+// pair.
+final case class Pair(value: Int):
   // scalafix:off DefinitionOrder
   def second: Int = 2
   def first: Int = 1
@@ -11,8 +14,6 @@ final case class Pair(value: Int): // assert: DefinitionOrder
 
 def entry: Int = Pair.one.first
 
-// Holds a kept range too, so neither half can move, and entry is stuck
-// between them.
 object Pair:
   // scalafix:off DefinitionOrder
   def two: Pair = Pair(2)

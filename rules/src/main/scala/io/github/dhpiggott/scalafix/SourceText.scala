@@ -63,36 +63,15 @@ private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
   // of them has nowhere to go once they move.
   def obstacle(items: Vector[Item], order: List[ItemId]): Option[Obstacle] = {
     val Run(pieces, run, indent, anchors) = runOf(items)
-    val anchored = anchors.flatMap(_.anchoredItem).toSet
     val blocks = pieces.map(_.block)
     val gaps = blocks.zip(blocks.drop(1)).map { case (before, after) =>
       Span(before.end, after.start)
     }
-    // When a class and its companion both hold a suppression, neither can
-    // move, so they are one block, and another definition written between
-    // them would have to move out of it.
-    val split = anchors.find { anchor =>
-      anchor.anchoredItem.exists(id =>
-        items(id).kept.isEmpty && anchoredStats(items(id)).size > 1
-      ) && pieces.exists(piece =>
-        piece != anchor && anchor.block.overlaps(piece.block)
-      )
-    }
     val blocked = gaps.find { gap =>
       gap.start > gap.end || text.substring(gap.start, gap.end).trim.nonEmpty
     }
-    (split, blocked) match {
-      case (Some(anchor), _) =>
-        Some(
-          Obstacle(
-            anchor.block,
-            "These definitions are out of order, but a class and its " +
-              "companion both hold a scalafix:off range or a scalafix:ok " +
-              "comment, so neither can move, and something is written " +
-              "between them. Move them by hand."
-          )
-        )
-      case (None, Some(gap)) =>
+    blocked match {
+      case Some(gap) =>
         Some(
           Obstacle(
             Span(gap.start, gap.end.max(gap.start)),
@@ -102,7 +81,7 @@ private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
               "below it; one separated from it by a blank line doesn't."
           )
         )
-      case (None, None) if indent.trim.nonEmpty =>
+      case None if indent.trim.nonEmpty =>
         Some(
           Obstacle(
             run,
@@ -110,7 +89,7 @@ private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
               "on a line of their own, so they can't be moved automatically."
           )
         )
-      case (None, None) if suppressedWithin(run, anchors.map(_.block)) =>
+      case None if suppressedWithin(run, anchors.map(_.block)) =>
         Some(
           Obstacle(
             run,
@@ -119,9 +98,9 @@ private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
               "won't edit inside those. Move them by hand."
           )
         )
-      case (None, None)
-          if anchors.flatMap(_.anchoredItem) !=
-            order.filter(anchored.contains) =>
+      case None
+          if anchors.map(_.block.start) !=
+            anchorsInOrder(items, order).map(_.block.start) =>
         Some(
           Obstacle(
             run,
@@ -131,7 +110,7 @@ private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
               "in place. Move them by hand."
           )
         )
-      case (None, None) => None
+      case None => None
     }
   }
 
@@ -142,20 +121,10 @@ private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
       .flatMap { id =>
         val item = items(id)
         if (item.kept.isDefined) List(Piece(keptBlockOf(item), Some(id)))
-        else {
-          val (held, free) = item.stats.partition(holdsSuppression)
-          val anchor = held.map(blockOf) match {
-            case Nil    => Nil
-            case blocks =>
-              List(
-                Piece(
-                  Span(blocks.map(_.start).min, blocks.map(_.end).max),
-                  Some(id)
-                )
-              )
+        else
+          item.stats.map { stat =>
+            Piece(blockOf(stat), Some(id).filter(_ => holdsSuppression(stat)))
           }
-          anchor ++ free.map(stat => Piece(blockOf(stat), None))
-        }
       }
       .sortBy(_.block.start)
     val run = Span(pieces.head.block.start, pieces.last.block.end)
@@ -166,6 +135,28 @@ private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
       anchors = pieces.filter(_.anchoredItem.isDefined)
     )
   }
+
+  private def lineStart(offset: Int): Int =
+    text.lastIndexOf('\n', offset - 1) + 1
+
+  // Whether a suppressed range overlaps the part of the run the rule would
+  // rewrite: all of the run except the anchors. Every range inside a
+  // definition makes it an anchor, so this only finds one that reaches
+  // across from one definition into the next.
+  private def suppressedWithin(run: Span, anchors: List[Span]): Boolean =
+    (keptRanges ++ okLines).exists { range =>
+      range.overlaps(run) && !anchors.exists(_.contains(range))
+    }
+
+  // The anchors in the order `order` puts them in: one for a kept range,
+  // and one for each definition holding a suppression, so a class and its
+  // companion that both hold one are two anchors, class first.
+  def anchorsInOrder(items: Vector[Item], order: List[ItemId]): List[Piece] =
+    order.flatMap { id =>
+      val item = items(id)
+      if (item.kept.isDefined) List(Piece(keptBlockOf(item), Some(id)))
+      else anchoredStats(item).map(stat => Piece(blockOf(stat), Some(id)))
+    }
 
   // A kept item's block runs from its `scalafix:off` comment to the end of
   // its `scalafix:on` one, when those sit directly against it, so that
@@ -188,9 +179,6 @@ private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
     text.substring(from, to).split('\n').forall { line =>
       line.trim.isEmpty || line.trim.startsWith("//")
     }
-
-  private def lineStart(offset: Int): Int =
-    text.lastIndexOf('\n', offset - 1) + 1
 
   // The definitions of an item that stay where they are: all of a kept
   // range's, and of any other item those that hold a suppression (see
@@ -233,15 +221,6 @@ private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
       parent.children.dropWhile(_ ne stat).drop(1).headOption.collect {
         case marker: Term.EndMarker => marker
       }
-    }
-
-  // Whether a suppressed range overlaps the part of the run the rule would
-  // rewrite: all of the run except the anchors. Every range inside a
-  // definition makes it an anchor, so this only finds one that reaches
-  // across from one definition into the next.
-  private def suppressedWithin(run: Span, anchors: List[Span]): Boolean =
-    (keptRanges ++ okLines).exists { range =>
-      range.overlaps(run) && !anchors.exists(_.contains(range))
     }
 
   // Scalafix patches whole tokens, so a replacement becomes the first token
@@ -320,9 +299,9 @@ private[scalafix] object SourceText {
   // Why a scope can't be rewritten, and the part of the file to report it at.
   final case class Obstacle(span: Span, message: String)
 
-  // Part of a run of definitions: one definition's block, or the block of
-  // an item's definitions that stay where they are (see `anchoredStats`),
-  // along with that item.
+  // Part of a run of definitions: one definition's block, or a kept range's,
+  // along with the item it belongs to if it stays where it is (see
+  // `anchoredStats`).
   final case class Piece(block: Span, anchoredItem: Option[ItemId])
 
   // A scope's definitions as written: the pieces, the span from the first to

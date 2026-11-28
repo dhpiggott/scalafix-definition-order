@@ -56,11 +56,11 @@ private[scalafix] final class FileOrder(implicit doc: SemanticDocument) {
         report(Position.Range(doc.input, span.start, span.end), message)
         None
       case None =>
-        // An anchor (a kept range, or an item holding a suppression) never
+        // An anchor (a kept range, or a definition holding a suppression) never
         // moves, so the rest of the run is rewritten around it. The anchors
         // split the run's text into segments (before the first, between each
         // pair, after the last), and split the canonical order into groups
-        // the same way. Both splits are at the same anchored items, so each
+        // the same way. Both splits are at the same anchors, so each
         // segment has a group, and segment n is rewritten with group n's
         // definitions. Written a, K, b, c with the order b, K, c, a, the
         // segments hold [a] and [b, c], the groups are [b] and [c, a], and
@@ -73,31 +73,15 @@ private[scalafix] final class FileOrder(implicit doc: SemanticDocument) {
         val segments = bounds.grouped(2).toList.collect { case List(from, to) =>
           Span(from, to)
         }
-        val anchoredItems = anchors.flatMap(_.anchoredItem)
-        // Where only one of a class and its companion holds a suppression,
-        // the other still moves, to the anchored one's side: a class goes
-        // at the end of the group above its companion, and a companion at
-        // the start of the group below its class. The anchors are in the
-        // canonical order, or `obstacle` would have reported them, so the
-        // group above anchor n is group n.
-        val (above, below) = anchoredItems.map { id =>
-          val stats = items(id).stats
-          val held = source.anchoredStats(items(id))
-          val (before, after) = stats.span(stat => !held.contains(stat))
-          (before, after.filterNot(held.contains))
-        }.unzip
-        val groups = splitAt(order, anchoredItems.toSet).zipWithIndex.map {
-          case (ids, index) =>
-            below.lift(index - 1).toList.flatten ++
-              ids.flatMap(items(_).stats) ++
-              above.lift(index).toList.flatten
-        }
+        val groups = groupsOf(items, order)
         // The anchors' own bodies. A kept range, such as `Log`'s levels, is
         // all suppressed, so there is nothing in it to edit. A definition
         // that holds a suppression, such as an object with a kept range
         // among the other definitions in its body, doesn't move, but those
         // other definitions are still ordered around the range inside it.
-        val anchorEdits = anchoredItems
+        val anchorEdits = anchors
+          .flatMap(_.anchoredItem)
+          .distinct
           .filter(items(_).kept.isEmpty)
           .flatMap(id => source.anchoredStats(items(id)))
           .flatMap(editsWithin)
@@ -142,15 +126,34 @@ private[scalafix] final class FileOrder(implicit doc: SemanticDocument) {
   private def report(position: Position, message: String): Unit =
     problems = Patch.lint(Misplaced(position, message)) :: problems
 
-  // The canonical order cut at each anchored item, which stays where it is.
-  private def splitAt(
-      order: List[ItemId],
-      anchored: Set[ItemId]
-  ): List[List[ItemId]] =
-    order.foldRight(List(List.empty[ItemId])) { (id, groups) =>
-      if (anchored(id)) Nil :: groups
-      else (id :: groups.head) :: groups.tail
-    }
+  // The canonical order's definitions, cut at each anchor: a kept range,
+  // or a definition holding a suppression. A class or companion that holds
+  // none still moves, and lands beside its other half, since the order puts
+  // the two together: a class at the end of the group above its companion,
+  // a companion at the start of the group below its class. Where both halves
+  // are anchors, the group between them is empty, so anything written there
+  // moves out. There is one more group than there are anchors, as there is
+  // one more segment.
+  private def groupsOf(
+      items: Vector[Item],
+      order: List[ItemId]
+  ): List[List[Stat]] = {
+    val (groups, current) =
+      order.foldLeft((List.empty[List[Stat]], List.empty[Stat])) {
+        case ((groups, current), id) =>
+          val item = items(id)
+          if (item.kept.isDefined) (current.reverse :: groups, Nil)
+          else {
+            val held = source.anchoredStats(item)
+            item.stats.foldLeft((groups, current)) {
+              case ((groups, current), stat) =>
+                if (held.contains(stat)) (current.reverse :: groups, Nil)
+                else (groups, stat :: current)
+            }
+          }
+      }
+    (current.reverse :: groups).reverse
+  }
 
   // A definition's block as it will read once the scopes nested in it are
   // rewritten too.
