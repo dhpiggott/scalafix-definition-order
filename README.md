@@ -228,6 +228,29 @@ exactly the diagnostics its `// assert: DefinitionOrder` comments name.
 sbt tests/test
 ```
 
+### What upstream changes would simplify
+
+Some of the rule's code works around what Scalafix and scalameta don't offer
+yet. These changes would let it go, most useful first:
+
+- **A Scalafix patch that moves text.** Scalafix drops any edit that touches a
+  `scalafix:off` range or a `scalafix:ok` line, and moving a definition is an
+  edit, so a definition holding one stays where it is and the rest of its
+  scope is arranged around it. A move that Scalafix carried out without
+  editing the moved text would remove most of that, and would let two such
+  definitions swap places, which the rule can't do now.
+- **Scalafix's suppressions as an API.** Scalafix's own reading of
+  `scalafix:off`, `scalafix:on` and `scalafix:ok` is internal, so the rule
+  reads those comments itself. Reading them from Scalafix would remove that
+  code and guarantee the two never disagree.
+- **A Scalafix patch that replaces a range of the file.** Patches replace whole
+  tokens or trees, so the rule turns each edit, which is a span of text, into
+  token patches, and fails if one doesn't start on a token boundary.
+- **Exhaustive matches over scalameta's trees.** scalameta's quasiquote
+  placeholders are private subtypes of `Defn` and `Decl`, so a match over
+  every kind still needs a wildcard case, and the compiler can't say when a
+  new kind is added.
+
 ## Licence
 
 [Apache 2.0](LICENSE).
