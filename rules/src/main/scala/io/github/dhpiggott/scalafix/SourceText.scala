@@ -120,11 +120,13 @@ private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
     val pieces = items.indices.toList
       .flatMap { id =>
         val item = items(id)
-        if (item.kept.isDefined) List(Piece(keptBlockOf(item), Some(id)))
-        else
-          item.stats.map { stat =>
-            Piece(blockOf(stat), Some(id).filter(_ => holdsSuppression(stat)))
-          }
+        item.kept match {
+          case Some(range) => List(Piece(keptBlockOf(item, range), Some(id)))
+          case None        =>
+            item.stats.map { stat =>
+              Piece(blockOf(stat), Some(id).filter(_ => holdsSuppression(stat)))
+            }
+        }
       }
       .sortBy(_.block.start)
     val run = Span(pieces.head.block.start, pieces.last.block.end)
@@ -154,15 +156,17 @@ private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
   def anchorsInOrder(items: Vector[Item], order: List[ItemId]): List[Piece] =
     order.flatMap { id =>
       val item = items(id)
-      if (item.kept.isDefined) List(Piece(keptBlockOf(item), Some(id)))
-      else anchoredStats(item).map(stat => Piece(blockOf(stat), Some(id)))
+      item.kept match {
+        case Some(range) => List(Piece(keptBlockOf(item, range), Some(id)))
+        case None        =>
+          anchoredStats(item).map(stat => Piece(blockOf(stat), Some(id)))
+      }
     }
 
   // A kept item's block runs from its `scalafix:off` comment to the end of
   // its `scalafix:on` one, when those sit directly against it, so that
   // nothing the rule writes lands inside the range.
-  private def keptBlockOf(item: Item): Span = {
-    val range = item.kept.getOrElse(Span(0, 0))
+  private def keptBlockOf(item: Item, range: Span): Span = {
     val first = blockOf(item.stats.head).start
     val last = blockOf(item.stats.last).end
     val start =
