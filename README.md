@@ -193,7 +193,10 @@ small run that belongs together, and use two ranges for definitions that don't.
 Where the range sits in the file doesn't change, so the other definitions move
 around it instead. The same goes for a definition with a range inside it, such
 as an object whose body holds one: the rule orders its body on either side of
-the range, but never moves the definition itself. Whatever comes before the range in the order fills the space
+the range, but never moves the definition itself. If it is a class or its
+companion, the pair stays as written too, companion first if that is how it
+was written, and anything written between the two stays between them; the
+rule reports that case for you to fix by hand. Whatever comes before the range in the order fills the space
 above it, and the rest fills the space below, so how many definitions sit on
 each side can change from how they were written.
 
