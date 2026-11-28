@@ -1,0 +1,4 @@
+# What sbt itself writes into the checkout. Editor and tool state (Metals,
+# Bloop, IDEs, Claude Code) belongs in a global gitignore.
+.bsp/
+target/

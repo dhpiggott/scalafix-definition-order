@@ -1,0 +1,15 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      # Saturday 06:00 UTC, the same slot as Scala Steward's run in
+      # dhpiggott/scala-steward, so the week's update pull requests arrive
+      # together.
+      day: saturday
+      time: "06:00"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
