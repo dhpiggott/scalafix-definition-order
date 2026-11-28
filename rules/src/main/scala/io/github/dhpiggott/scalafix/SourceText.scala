@@ -3,6 +3,7 @@ package io.github.dhpiggott.scalafix
 import scala.annotation.tailrec
 import scala.meta.Position
 import scala.meta.Stat
+import scala.meta.Term
 import scala.meta.Token
 
 import io.github.dhpiggott.scalafix.Scopes.*
@@ -206,16 +207,16 @@ private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
   }
 
   // Scala 3 lets a definition close with `end <name>`, which scalameta parses
-  // as a statement of its own, after the definition rather than in it. It
-  // belongs to the definition all the same: left behind, it would close
-  // whatever moved in above it, which doesn't compile.
-  private def endMarkerEnd(stat: Stat): Option[Int] = {
-    val marker = EndMarker.pattern.matcher(text)
-    marker.region(stat.pos.end, text.length)
-    if (marker.lookingAt() && endMarkerNames(stat)(marker.group(1)))
-      Some(marker.end)
-    else None
-  }
+  // as a statement of its own, the one after the definition rather than part
+  // of it. It belongs to the definition all the same: left behind, it would
+  // close whatever moved in above it, which doesn't compile. A marker can
+  // only close the definition directly above it, so its name needs no check.
+  private def endMarkerEnd(stat: Stat): Option[Int] =
+    stat.parent.flatMap { parent =>
+      parent.children.dropWhile(_ ne stat).drop(1).headOption.collect {
+        case marker: Term.EndMarker => marker.pos.end
+      }
+    }
 
   // Walks up from a definition's first line over the comments directly
   // above it, each starting a line of its own: `//` lines, and `/* */`
@@ -354,9 +355,6 @@ private[scalafix] object SourceText {
       indent: String,
       anchors: List[Piece]
   )
-
-  // `end`, on a line of its own after the definition, and the name it gives.
-  private val EndMarker = """\s*\n[ \t]*end[ \t]+`?([^`\s;]+)`?""".r
 
   private final case class Marker(isOff: Boolean, comment: Token.Comment)
 }

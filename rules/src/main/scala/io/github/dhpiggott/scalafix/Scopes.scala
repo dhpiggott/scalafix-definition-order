@@ -11,19 +11,6 @@ private[scalafix] object Scopes {
   def covers(stat: Stat, offset: Int): Boolean =
     stat.pos.start <= offset && offset < stat.pos.end
 
-  // What an `end` marker closing the definition can name: the definition, or
-  // for one without a single name of its own, the keyword that starts it.
-  def endMarkerNames(stat: Stat): Set[String] = {
-    val keyword = stat match {
-      case _: Defn.ExtensionGroup             => Some("extension")
-      case _: Defn.Given | _: Defn.GivenAlias => Some("given")
-      case _: Defn.Val                        => Some("val")
-      case _: Defn.Var                        => Some("var")
-      case _                                  => None
-    }
-    definedNames(stat).map(_.value).toSet ++ keyword
-  }
-
   // An abstract member: a `def`, `val`, `var`, `type` or `given` with no
   // body, or an extension block whose methods all have none.
   def isDeclaration(stat: Stat): Boolean = stat match {
