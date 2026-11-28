@@ -68,11 +68,12 @@ private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
     val gaps = blocks.zip(blocks.drop(1)).map { case (before, after) =>
       Span(before.end, after.start)
     }
-    // An anchored class and companion are one block, so another
-    // definition written between them would have to move out of it.
+    // When a class and its companion both hold a suppression, neither can
+    // move, so they are one block, and another definition written between
+    // them would have to move out of it.
     val split = anchors.find { anchor =>
       anchor.anchoredItem.exists(id =>
-        items(id).kept.isEmpty && items(id).stats.size > 1
+        items(id).kept.isEmpty && anchoredStats(items(id)).size > 1
       ) && pieces.exists(piece =>
         piece != anchor && anchor.block.overlaps(piece.block)
       )
@@ -85,10 +86,10 @@ private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
         Some(
           Obstacle(
             anchor.block,
-            "These definitions are out of order, but a class or its " +
-              "companion holds a scalafix:off range or a scalafix:ok " +
-              "comment, so the pair stays where it is, and something is " +
-              "written between them. Move them by hand."
+            "These definitions are out of order, but a class and its " +
+              "companion both hold a scalafix:off range or a scalafix:ok " +
+              "comment, so neither can move, and something is written " +
+              "between them. Move them by hand."
           )
         )
       case (None, Some(gap)) =>
@@ -141,15 +142,20 @@ private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
       .flatMap { id =>
         val item = items(id)
         if (item.kept.isDefined) List(Piece(keptBlockOf(item), Some(id)))
-        else if (holdsSuppression(item)) {
-          val blocks = item.stats.map(blockOf)
-          List(
-            Piece(
-              Span(blocks.map(_.start).min, blocks.map(_.end).max),
-              Some(id)
-            )
-          )
-        } else item.stats.map(stat => Piece(blockOf(stat), None))
+        else {
+          val (held, free) = item.stats.partition(holdsSuppression)
+          val anchor = held.map(blockOf) match {
+            case Nil    => Nil
+            case blocks =>
+              List(
+                Piece(
+                  Span(blocks.map(_.start).min, blocks.map(_.end).max),
+                  Some(id)
+                )
+              )
+          }
+          anchor ++ free.map(stat => Piece(blockOf(stat), None))
+        }
       }
       .sortBy(_.block.start)
     val run = Span(pieces.head.block.start, pieces.last.block.end)
@@ -183,15 +189,24 @@ private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
       line.trim.isEmpty || line.trim.startsWith("//")
     }
 
+  private def lineStart(offset: Int): Int =
+    text.lastIndexOf('\n', offset - 1) + 1
+
+  // The definitions of an item that stay where they are: all of a kept
+  // range's, and of any other item those that hold a suppression (see
+  // `holdsSuppression`). Of a class and its companion, that can be only one
+  // of the two, and the other is still free to move to its side.
+  def anchoredStats(item: Item): List[Stat] =
+    if (item.kept.isDefined) item.stats
+    else item.stats.filter(holdsSuppression)
+
   // Whether a `scalafix:off` range or a `scalafix:ok` comment lies within
-  // the item, such as in the body of an object. Scalafix drops any edit
-  // inside one, so the item can't be moved as text; it stays where it is,
-  // like a kept range, and the rest of its scope is ordered around it.
-  // Edits to its own body, outside the range, still apply.
-  private def holdsSuppression(item: Item): Boolean =
-    (keptRanges ++ okLines).exists { range =>
-      item.stats.exists(stat => blockOf(stat).overlaps(range))
-    }
+  // the definition, such as in the body of an object. Scalafix drops any
+  // edit inside one, so the definition can't be moved as text; it stays
+  // where it is, like a kept range, and the rest of its scope is ordered
+  // around it. Edits to its own body, outside the range, still apply.
+  private def holdsSuppression(stat: Stat): Boolean =
+    (keptRanges ++ okLines).exists(blockOf(stat).overlaps)
 
   // A definition together with the comments directly above it, the `end`
   // marker closing it, and a comment trailing it on its last line. Which
@@ -219,9 +234,6 @@ private[scalafix] final class SourceText(implicit doc: SemanticDocument) {
         case marker: Term.EndMarker => marker
       }
     }
-
-  private def lineStart(offset: Int): Int =
-    text.lastIndexOf('\n', offset - 1) + 1
 
   // Whether a suppressed range overlaps the part of the run the rule would
   // rewrite: all of the run except the anchors. Every range inside a
@@ -309,8 +321,8 @@ private[scalafix] object SourceText {
   final case class Obstacle(span: Span, message: String)
 
   // Part of a run of definitions: one definition's block, or the block of
-  // an item that stays where it is (a kept range, or one holding a
-  // suppression; see `holdsSuppression`), along with that item.
+  // an item's definitions that stay where they are (see `anchoredStats`),
+  // along with that item.
   final case class Piece(block: Span, anchoredItem: Option[ItemId])
 
   // A scope's definitions as written: the pieces, the span from the first to

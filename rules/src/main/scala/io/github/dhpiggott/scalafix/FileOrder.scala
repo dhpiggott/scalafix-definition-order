@@ -73,17 +73,33 @@ private[scalafix] final class FileOrder(implicit doc: SemanticDocument) {
         val segments = bounds.grouped(2).toList.collect { case List(from, to) =>
           Span(from, to)
         }
-        val anchored = anchors.flatMap(_.anchoredItem).toSet
-        val groups =
-          splitAt(order, anchored).map(_.flatMap(items(_).stats))
+        val anchoredItems = anchors.flatMap(_.anchoredItem)
+        // Where only one of a class and its companion holds a suppression,
+        // the other still moves, to the anchored one's side: a class goes
+        // at the end of the group above its companion, and a companion at
+        // the start of the group below its class. The anchors are in the
+        // canonical order, or `obstacle` would have reported them, so the
+        // group above anchor n is group n.
+        val (above, below) = anchoredItems.map { id =>
+          val stats = items(id).stats
+          val held = source.anchoredStats(items(id))
+          val (before, after) = stats.span(stat => !held.contains(stat))
+          (before, after.filterNot(held.contains))
+        }.unzip
+        val groups = splitAt(order, anchoredItems.toSet).zipWithIndex.map {
+          case (ids, index) =>
+            below.lift(index - 1).toList.flatten ++
+              ids.flatMap(items(_).stats) ++
+              above.lift(index).toList.flatten
+        }
         // The anchors' own bodies. A kept range, such as `Log`'s levels, is
-        // all suppressed, so there is nothing in it to edit. An item that
-        // holds a suppression, such as an object with a kept range among
-        // the other definitions in its body, doesn't move, but those other
-        // definitions are still ordered around the range inside it.
-        val anchorEdits = anchored.toList.sorted
+        // all suppressed, so there is nothing in it to edit. A definition
+        // that holds a suppression, such as an object with a kept range
+        // among the other definitions in its body, doesn't move, but those
+        // other definitions are still ordered around the range inside it.
+        val anchorEdits = anchoredItems
           .filter(items(_).kept.isEmpty)
-          .flatMap(items(_).stats)
+          .flatMap(id => source.anchoredStats(items(id)))
           .flatMap(editsWithin)
         val last = segments.size - 1
         Some(anchorEdits ++ segments.zip(groups).zipWithIndex.flatMap {
